@@ -22,6 +22,7 @@ Fluxation reimagines AI as a decentralized, event-driven network of heterogeneou
 - **Research Use:** Fully open source under AGPLv3. Dive in, break things, contribute.
 - **Commercial Deployment:** Looking to deploy Fluxation in proprietary products? Need SLA, custom primitives, or dedicated support?
   📩 **Get in touch:** [![Email](https://img.shields.io/badge/Email-patcex@proton.me-8A2BE2?logo=protonmail&logoColor=white)](mailto:patcex@proton.me) [![X](https://img.shields.io/badge/X-@PatcexOps-000000?logo=x&logoColor=white)](https://x.com/PatcexOps)
+-  **Donate:** XMR 4BsoP5LgTrpBE9NBuf12KWLNgD1oAcVsZAFke6VzxWFJb556k6NdeksjGwgKFTfENFV8Y7rAYrXfULAVaXT29iDA7V9GrPBt4HET6MFpi8
   
 > *"Patching reality, one agent at a time."*
 
