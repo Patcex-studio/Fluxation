@@ -1,0 +1,28 @@
+[package]
+name = "custom_optim"
+version = "0.1.0"
+edition = "2021"
+authors = ["adaptiflux"]
+description = "Custom optimization library for adaptiflux-core with CPU and CUDA backends."
+license-file = "LICENSE"
+
+[lib]
+name = "custom_optim"
+crate-type = ["rlib"]
+
+[dependencies]
+ndarray = "0.15"
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+libc = "0.2"
+cuda-sys = { version = "0.2", optional = true }
+
+[build-dependencies]
+cc = "1.0"
+
+[features]
+default = ["cpu"]
+cpu = []
+cuda = ["cuda-sys"]

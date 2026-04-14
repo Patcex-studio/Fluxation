@@ -1,0 +1,71 @@
+[package]
+
+name = "adaptiflux-core"
+version = "1.0.0"
+edition = "2021"
+authors = ["https://github.com/Jocer-Speis"]
+description = "Core framework for Adaptiflux distributed self-organizing swarm architecture."
+license-file = "LICENSE"
+repository = "https://github.com/adaptiflux/adaptiflux-core"
+keywords = ["adaptiflux", "swarm", "agent", "topology", "distributed"]
+readme = "README.md"
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1.42", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "2.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-appender = "0.2"
+crossterm = { version = "0.27", optional = true }
+ratatui = { version = "0.26", optional = true }
+rayon = "1.7"
+petgraph = "0.7"
+uuid = { version = "1.4", features = ["v4"] }
+thiserror = "1.0"
+num_cpus = "1.17"
+wgpu = { version = "0.20", optional = true }
+image = "0.24"
+parquet = "12.0"
+sysinfo = "0.33"
+mnist = "0.5"
+clap = { version = "3.2", features = ["derive"] }
+custom_optim = { path = "../custom_optim", version = "0.1.0", optional = true, default-features = false, features = ["cpu"] }
+adaptiflux-optim = { path = "../adaptiflux-optim", version = "0.1.0", optional = true, default-features = false }
+rand = "0.10.1"
+
+[dev-dependencies]
+proptest = "1.0"
+criterion = "0.4"
+
+[features]
+default = []
+gpu = ["wgpu", "custom_optim/cuda"]
+cpu_only = ["custom_optim/cpu"]
+custom_optim = ["custom_optim/cpu"]
+adaptiflux_optim = ["adaptiflux-optim"]
+ui = ["crossterm", "ratatui"]
+
+[profile.release]
+debug = true
+
+[workspace]
+members = []
+
+[[bench]]
+name = "optimizer_bench"
+harness = false
+
+[[bench]]
+name = "scheduler_bench"
+harness = false
+
+[[example]]
+name = "mnist_learning"
+path = "examples/mnist_learning/main.rs"
+
+[[example]]
+name = "mnist_full_experiment"
+path = "examples/mnist_full_experiment/main.rs"

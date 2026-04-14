@@ -1,0 +1,22 @@
+# Rust artifacts
+/target/
+Cargo.lock
+
+# Logs and profiling outputs
+logs/
+*.log
+!archive/**/*.log
+perf.data
+flamegraph.svg
+
+# Temporary and editor files
+*.tmp
+*.swp
+*.bak
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Data directories
+data/

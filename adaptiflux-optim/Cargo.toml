@@ -1,0 +1,15 @@
+[package]
+name = "adaptiflux-optim"
+version = "0.1.0"
+edition = "2021"
+authors = ["adaptiflux"]
+description = "High-performance adaptive optimization kernels for adaptiflux-core."
+license-file = "LICENSE"
+
+[lib]
+name = "adaptiflux_optim"
+crate-type = ["rlib"]
+
+[dependencies]
+rand = "0.8"
+wide = "0.7"
