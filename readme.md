@@ -3,7 +3,7 @@
 
 
 
-[![License](https://img.shields.io/badge/License-AGPLv3%20%7C%20Commercial-blue)](https://www.gnu.org/licenses/agpl-3.0.html) [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange)](https://www.rust-lang.org/) ![Spiking Neural](https://img.shields.io/badge/AI-Spiking%20Neural-blueviolet?logo=aither) ![Hybrid](https://img.shields.io/badge/architecture-PID%20%7C%20SNN%20%7C%20Swarm-important)
+[![License](https://img.shields.io/badge/License-AGPLv3%20%7C%20Commercial-blue)](https://www.gnu.org/licenses/agpl-3.0.html) [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange)](https://www.rust-lang.org/) ![Spiking Neural](https://img.shields.io/badge/AI-Spiking%20Neural-blueviolet?logo=aither) ![Hybrid](https://img.shields.io/badge/architecture-PID%20%7C%20SNN%20%7C%20Swarm-important) 
 
 
 
@@ -21,8 +21,8 @@ Fluxation reimagines AI as a decentralized, event-driven network of heterogeneou
 ### 🛡️ Licensing & Support
 - **Research Use:** Fully open source under AGPLv3. Dive in, break things, contribute.
 - **Commercial Deployment:** Looking to deploy Fluxation in proprietary products? Need SLA, custom primitives, or dedicated support?
-  📩 **Get in touch:** patcex@proton.me
-
+  📩 **Get in touch:** [![Email](https://img.shields.io/badge/Email-patcex@proton.me-8A2BE2?logo=protonmail&logoColor=white)](mailto:patcex@proton.me) [![X](https://img.shields.io/badge/X-@PatcexOps-000000?logo=x&logoColor=white)](https://x.com/PatcexOps)
+  
 > *"Patching reality, one agent at a time."*
 
 ---
