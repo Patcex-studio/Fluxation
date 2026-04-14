@@ -37,6 +37,6 @@ Fluxation reimagines AI as a decentralized, event-driven network of heterogeneou
 
 
 [![Stars](https://img.shields.io/github/stars/Patcex-studio/Fluxation?style=for-the-badge&logo=github)](https://github.com/Patcex-studio/Fluxation/stargazers)
-[![Forks](https://img.shields.io/github/forks/Patcex-studio/Fluxation?style=for-the-badge&logo=github)](https://github.com/Patcex-studio/Fluxation/)
+[![Forks](https://img.shields.io/github/forks/Patcex-studio/Fluxation?style=for-the-badge&logo=github)](https://github.com/Patcex-studio/Fluxation/forks)
 [![Issues](https://img.shields.io/github/issues/Patcex-studio/Fluxation?style=for-the-badge&logo=github)](https://github.com/Patcex-studio/Fluxation/)
 [![Last Commit](https://img.shields.io/github/last-commit/Patcex-studio/Fluxation?style=for-the-badge&logo=git)](https://github.com/Patcex-studio/Fluxation/)
