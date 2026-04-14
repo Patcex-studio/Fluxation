@@ -1,6 +1,6 @@
 # Commercial License for Fluxation (adaptiflux-core)
 
-Copyright (C) 2026 Dmitry S. <email@example.com>
+Copyright (C) 2026 jocer S. patcex@proton.me
 
 This software is dual-licensed:
 - Under the terms of the GNU Affero General Public License v3.0 or later (AGPLv3), or
