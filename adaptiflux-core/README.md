@@ -63,12 +63,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 For more examples, see the `examples/` directory.
 
-## Documentation
-
-- **API Documentation**: Run `cargo doc --open` to view the full API documentation locally.
-- **Online Docs**: Available on [docs.rs](https://docs.rs/adaptiflux-core) (once published).
-- **Architecture**: See `docs/architecture.md` for detailed architectural overview.
-- **Rules and Consistency**: See `docs/rules_and_consistency.md` for plasticity rules documentation.
 
 ## Repository layout
 
@@ -117,16 +111,15 @@ cargo run --example mnist_full_experiment
 Use optional features:
 
 ```bash
-cargo build --features ui
 cargo build --features adaptiflux_optim
 cargo build --features custom_optim
 ```
 
 ## Documentation
 
-- Architecture overview: `docs/architecture.md`
+- Architecture overview: `nope`
 - Rules and consistency: `docs/rules_and_consistency.md`
-- Archived internal reports and experiment outputs: `archive/`
+- Archived internal reports and experiment outputs: `nope`
 
 ## Contributing
 
