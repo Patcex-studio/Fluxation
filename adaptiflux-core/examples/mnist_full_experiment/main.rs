@@ -247,7 +247,7 @@ mod mnist_architecture {
         async fn update(
             &self,
             state: &mut Box<dyn Any + Send + Sync>,
-            inputs: Vec<Message>,
+            inputs: Vec<(ZoooidId, Message)>,
             topology: &ZoooidTopology,
             _memory: Option<&MemoryPayload>,
         ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -259,7 +259,7 @@ mod mnist_architecture {
             let mut total_input: f32 = 0.0;
             let mut control_adjustment: f32 = 0.0;
 
-            for message in inputs {
+            for (sender, message) in inputs {
                 match message {
                     Message::SpikeEvent { amplitude, .. } => {
                         total_input += amplitude;
@@ -527,7 +527,7 @@ mod mnist_architecture {
             &self,
             agent_id: ZoooidId,
             iteration: u64,
-            inputs: &[Message],
+            inputs: &[(ZoooidId, Message)],
             state: &dyn Any,
             _result: &AgentUpdateResult,
             store: &mut adaptiflux_core::memory::long_term_store::TableLongTermStore,
@@ -543,7 +543,7 @@ mod mnist_architecture {
                     output_state.spike_count as f32,
                     inputs
                         .iter()
-                        .filter_map(|m| match m {
+                        .filter_map(|(_sender, msg)| match msg {
                             Message::SpikeEvent { amplitude, .. } => Some(*amplitude),
                             _ => None,
                         })
@@ -870,10 +870,10 @@ async fn run_training(
     Ok((scheduler, architecture))
 }
 
-fn observation_from_inputs(inputs: &[Message]) -> f32 {
+fn observation_from_inputs(inputs: &[(ZoooidId, Message)]) -> f32 {
     inputs
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|(_sender, msg)| match msg {
             Message::SpikeEvent { amplitude, .. } => Some(*amplitude),
             _ => None,
         })

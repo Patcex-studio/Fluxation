@@ -565,8 +565,8 @@ impl CoreScheduler {
         struct PendingAgentUpdate {
             agent_id: ZoooidId,
             handle: ZoooidHandle,
-            inputs: Vec<Message>,
-            memory_inputs_snapshot: Vec<Message>,
+            inputs: Vec<(ZoooidId, Message)>,
+            memory_inputs_snapshot: Vec<(ZoooidId, Message)>,
             mem_for_update: Option<MemoryPayload>,
         }
 
@@ -574,16 +574,16 @@ impl CoreScheduler {
             handle: ZoooidHandle,
             result: Result<AgentUpdateResult, String>,
             agent_id: ZoooidId,
-            memory_inputs_snapshot: Vec<Message>,
-            inputs: Vec<Message>,
+            memory_inputs_snapshot: Vec<(ZoooidId, Message)>,
+            inputs: Vec<(ZoooidId, Message)>,
         }
 
         let mut pending_updates = Vec::new();
         for agent_id in sorted_ids {
             if let Some(handle) = self.agents.remove(&agent_id) {
                 let inputs = self.message_bus.receive(agent_id).await.unwrap_or_default();
-                for m in &inputs {
-                    if let Message::Error(e) = m {
+                for (_sender, msg) in &inputs {
+                    if let Message::Error(e) = msg {
                         inline_error_feedback.merge_scalar(agent_id, *e);
                     }
                 }

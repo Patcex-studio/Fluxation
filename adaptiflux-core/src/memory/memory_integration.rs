@@ -166,7 +166,7 @@ pub trait ExperienceRecorder: Send + Sync {
         &self,
         agent_id: ZoooidId,
         iteration: u64,
-        inputs: &[Message],
+        inputs: &[(ZoooidId, Message)],
         state: &dyn std::any::Any,
         result: &AgentUpdateResult,
         store: &mut TableLongTermStore,

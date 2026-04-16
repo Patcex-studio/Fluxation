@@ -27,7 +27,7 @@ pub trait FocusScheduler: Send + Sync {
         &self,
         agent_id: ZoooidId,
         iteration: u64,
-        inputs: &[Message],
+        inputs: &[(ZoooidId, Message)],
         role: RoleType,
     ) -> Query;
 
@@ -37,7 +37,7 @@ pub trait FocusScheduler: Send + Sync {
         &self,
         agent_id: ZoooidId,
         iteration: u64,
-        inputs: &[Message],
+        inputs: &[(ZoooidId, Message)],
         role: RoleType,
     ) -> Vec<f32>;
 }
@@ -46,7 +46,7 @@ pub trait FocusScheduler: Send + Sync {
 pub struct ErrorSimilarityFocus {
     pub tag: Option<String>,
     pub min_similarity: f32,
-    pub observation_fn: fn(&[Message]) -> crate::utils::types::StateValue,
+    pub observation_fn: fn(&[(ZoooidId, Message)]) -> crate::utils::types::StateValue,
 }
 
 impl Default for ErrorSimilarityFocus {
@@ -60,10 +60,10 @@ impl Default for ErrorSimilarityFocus {
 }
 
 impl ErrorSimilarityFocus {
-    fn situation_embedding(&self, inputs: &[Message]) -> Vec<f32> {
+    fn situation_embedding(&self, inputs: &[(ZoooidId, Message)]) -> Vec<f32> {
         let mut err = 0.0_f32;
-        for m in inputs.iter().rev() {
-            if let Message::Error(e) = m {
+        for (_sender, msg) in inputs.iter().rev() {
+            if let Message::Error(e) = msg {
                 err = *e;
                 break;
             }
@@ -78,7 +78,7 @@ impl FocusScheduler for ErrorSimilarityFocus {
         &self,
         agent_id: ZoooidId,
         _iteration: u64,
-        inputs: &[Message],
+        inputs: &[(ZoooidId, Message)],
         _role: RoleType,
     ) -> Query {
         let emb = self.situation_embedding(inputs);
@@ -93,7 +93,7 @@ impl FocusScheduler for ErrorSimilarityFocus {
         &self,
         _agent_id: ZoooidId,
         _iteration: u64,
-        inputs: &[Message],
+        inputs: &[(ZoooidId, Message)],
         _role: RoleType,
     ) -> Vec<f32> {
         self.situation_embedding(inputs)
@@ -112,11 +112,11 @@ impl Default for PheromoneFocus {
 }
 
 impl PheromoneFocus {
-    fn pheromone_embedding(&self, inputs: &[Message]) -> Vec<f32> {
+    fn pheromone_embedding(&self, inputs: &[(ZoooidId, Message)]) -> Vec<f32> {
         let mut strengths: Vec<f32> = inputs
             .iter()
-            .filter_map(|m| {
-                if let Message::PheromoneLevel(s, _) = m {
+            .filter_map(|(_sender, msg)| {
+                if let Message::PheromoneLevel(s, _) = msg {
                     Some(*s)
                 } else {
                     None
@@ -137,7 +137,7 @@ impl FocusScheduler for PheromoneFocus {
         &self,
         agent_id: ZoooidId,
         _iteration: u64,
-        inputs: &[Message],
+        inputs: &[(ZoooidId, Message)],
         role: RoleType,
     ) -> Query {
         let _ = role;
@@ -153,7 +153,7 @@ impl FocusScheduler for PheromoneFocus {
         &self,
         _agent_id: ZoooidId,
         _iteration: u64,
-        inputs: &[Message],
+        inputs: &[(ZoooidId, Message)],
         _role: RoleType,
     ) -> Vec<f32> {
         self.pheromone_embedding(inputs)

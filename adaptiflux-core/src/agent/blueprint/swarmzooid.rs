@@ -26,6 +26,7 @@ use crate::core::topology::{TopologyChange, ZoooidTopology};
 use crate::memory::types::MemoryPayload;
 use crate::primitives::base::PrimitiveMessage;
 use crate::primitives::swarm::pfsm::{Pfsm, PfsmParams, PfsmState};
+use crate::utils::types::ZoooidId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmzooidParams {
@@ -66,7 +67,7 @@ impl AgentBlueprint for SwarmzooidBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(ZoooidId, Message)>,
         topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -78,7 +79,7 @@ impl AgentBlueprint for SwarmzooidBlueprint {
 
         let primitive_inputs: Vec<PrimitiveMessage> = inputs
             .into_iter()
-            .filter_map(|msg| match msg {
+            .filter_map(|(_sender, msg)| match msg {
                 Message::PheromoneLevel(strength, type_id) => {
                     Some(PrimitiveMessage::Pheromone { strength, type_id })
                 }

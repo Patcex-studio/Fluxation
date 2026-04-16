@@ -25,8 +25,7 @@ use crate::core::message_bus::message::Message;
 use crate::core::topology::{TopologyChange, ZoooidTopology};
 use crate::memory::types::MemoryPayload;
 use crate::primitives::base::PrimitiveMessage;
-use crate::primitives::spiking::lif::{LifNeuron, LifParams, LifState};
-
+use crate::primitives::spiking::lif::{LifNeuron, LifParams, LifState};use crate::utils::types::ZoooidId;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SensorzooidParams {
     pub lif_params: LifParams,
@@ -66,7 +65,7 @@ impl AgentBlueprint for SensorzooidBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(ZoooidId, Message)>,
         topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -79,7 +78,7 @@ impl AgentBlueprint for SensorzooidBlueprint {
 
         let primitive_inputs: Vec<PrimitiveMessage> = inputs
             .into_iter()
-            .filter_map(|msg| match msg {
+            .filter_map(|(_sender, msg)| match msg {
                 Message::AnalogInput(value) => Some(PrimitiveMessage::InputCurrent(value)),
                 _ => None,
             })

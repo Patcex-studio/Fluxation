@@ -175,7 +175,7 @@ impl AgentBlueprint for GenericPhysarumBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn std::any::Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(ZoooidId, Message)>,
         _topology: &crate::core::topology::ZoooidTopology,
         _memory: Option<&crate::memory::types::MemoryPayload>,
     ) -> Result<crate::agent::state::AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>>
@@ -186,7 +186,7 @@ impl AgentBlueprint for GenericPhysarumBlueprint {
 
         let primitive_inputs: Vec<crate::primitives::base::PrimitiveMessage> = inputs
             .into_iter()
-            .filter_map(|msg| match msg {
+            .filter_map(|(_sender, msg)| match msg {
                 Message::AnalogInput(value) => Some(
                     crate::primitives::base::PrimitiveMessage::InputCurrent(value),
                 ),

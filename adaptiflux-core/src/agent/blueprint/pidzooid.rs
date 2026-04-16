@@ -26,6 +26,7 @@ use crate::core::topology::{TopologyChange, ZoooidTopology};
 use crate::memory::types::MemoryPayload;
 use crate::primitives::base::PrimitiveMessage;
 use crate::primitives::control::pid::{PidController, PidParams, PidState};
+use crate::utils::types::ZoooidId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PIDzooidParams {
@@ -69,7 +70,7 @@ impl AgentBlueprint for PIDzooidBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(ZoooidId, Message)>,
         topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -81,7 +82,7 @@ impl AgentBlueprint for PIDzooidBlueprint {
 
         let primitive_inputs: Vec<PrimitiveMessage> = inputs
             .into_iter()
-            .filter_map(|msg| match msg {
+            .filter_map(|(_sender, msg)| match msg {
                 Message::Error(value) => Some(PrimitiveMessage::Error(value)),
                 _ => None,
             })

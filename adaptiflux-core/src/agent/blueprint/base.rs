@@ -22,6 +22,7 @@ use crate::agent::state::{AgentUpdateResult, RoleType};
 use crate::core::message_bus::message::Message;
 use crate::core::topology::ZoooidTopology;
 use crate::memory::types::MemoryPayload;
+use crate::utils::types::ZoooidId;
 
 /// Core trait for defining agent blueprints in the Adaptiflux system
 ///
@@ -97,7 +98,7 @@ pub trait AgentBlueprint: Send + Sync {
     /// # Arguments
     ///
     /// * `state` - Mutable reference to the agent's current state
-    /// * `inputs` - Vector of incoming messages from other agents
+    /// * `inputs` - Vector of incoming messages from other agents, with sender IDs
     /// * `topology` - Current system topology for spatial/contextual awareness
     /// * `memory` - Optional memory payload for attention/memory integration
     ///
@@ -107,7 +108,7 @@ pub trait AgentBlueprint: Send + Sync {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(ZoooidId, Message)>,
         topology: &ZoooidTopology,
         memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>>;

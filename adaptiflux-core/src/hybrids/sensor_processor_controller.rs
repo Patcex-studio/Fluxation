@@ -75,6 +75,12 @@ impl SensorProcessorControllerArchitecture {
             params: CognitivezooidParams {
                 izh_params: config.cognitive_izh_params,
                 connection_request_interval: 10,
+                stdp_a_plus: 0.01,
+                stdp_a_minus: 0.005,
+                stdp_tau_plus: 20.0,
+                stdp_tau_minus: 20.0,
+                weight_decay: 0.0001,
+                pruning_threshold: 0.001,
             },
         };
 

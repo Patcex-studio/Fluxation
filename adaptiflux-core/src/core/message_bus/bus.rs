@@ -58,15 +58,15 @@ pub trait MessageBus: Send + Sync {
         targets: &[ZoooidId],
         message: Message,
     ) -> Result<(), SendError>;
-    async fn receive(&self, id: ZoooidId) -> Result<Vec<Message>, RecvError>;
+    async fn receive(&self, id: ZoooidId) -> Result<Vec<(ZoooidId, Message)>, RecvError>;
 
     fn notifier(&self) -> Option<Arc<Notify>>;
 }
 
 #[derive(Clone)]
 pub struct LocalBus {
-    senders: Arc<Mutex<HashMap<ZoooidId, Sender<Message>>>>,
-    receivers: Arc<Mutex<HashMap<ZoooidId, Receiver<Message>>>>,
+    senders: Arc<Mutex<HashMap<ZoooidId, Sender<(ZoooidId, Message)>>>>,
+    receivers: Arc<Mutex<HashMap<ZoooidId, Receiver<(ZoooidId, Message)>>>>,
     notify: Arc<Notify>,
 }
 
@@ -104,7 +104,7 @@ impl MessageBus for LocalBus {
         Ok(())
     }
 
-    async fn send(&self, _from: ZoooidId, to: ZoooidId, message: Message) -> Result<(), SendError> {
+    async fn send(&self, from: ZoooidId, to: ZoooidId, message: Message) -> Result<(), SendError> {
         let sender_opt = {
             let senders = self.senders.lock().await;
             senders.get(&to).cloned()
@@ -112,7 +112,7 @@ impl MessageBus for LocalBus {
 
         if let Some(sender) = sender_opt {
             let send_start = Instant::now();
-            let result = sender.send(message).await.map_err(|_| SendError);
+            let result = sender.send((from, message)).await.map_err(|_| SendError);
             let duration_ms = send_start.elapsed().as_secs_f64() * 1000.0;
             trace!(to = ?to, duration_ms, "LocalBus send completed");
             if result.is_ok() {
@@ -127,7 +127,7 @@ impl MessageBus for LocalBus {
 
     async fn broadcast(
         &self,
-        _from: ZoooidId,
+        from: ZoooidId,
         targets: &[ZoooidId],
         message: Message,
     ) -> Result<(), SendError> {
@@ -150,20 +150,20 @@ impl MessageBus for LocalBus {
 
         // Send to all targets sequentially (already optimized by holding mutex only once)
         for sender in targets_to_send {
-            sender.send(message.clone()).await.map_err(|_| SendError)?;
+            sender.send((from, message.clone())).await.map_err(|_| SendError)?;
         }
 
         self.notify.notify_one();
         Ok(())
     }
 
-    async fn receive(&self, id: ZoooidId) -> Result<Vec<Message>, RecvError> {
+    async fn receive(&self, id: ZoooidId) -> Result<Vec<(ZoooidId, Message)>, RecvError> {
         let mut receivers = self.receivers.lock().await;
         if let Some(receiver) = receivers.get_mut(&id) {
             let mut messages = Vec::new();
             let initial_len = receiver.len();
-            while let Ok(message) = receiver.try_recv() {
-                messages.push(message);
+            while let Ok(msg) = receiver.try_recv() {
+                messages.push(msg);
             }
             trace!(id = ?id, initial_queue_len = initial_len, received = messages.len(), "LocalBus receive");
             return Ok(messages);

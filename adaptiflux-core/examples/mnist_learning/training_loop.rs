@@ -179,10 +179,10 @@ pub async fn run_training(
     Ok((scheduler, architecture))
 }
 
-fn observation_from_inputs(inputs: &[Message]) -> f32 {
+fn observation_from_inputs(inputs: &[(ZoooidId, Message)]) -> f32 {
     inputs
         .iter()
-        .filter_map(|m| match m {
+        .filter_map(|(_sender, msg)| match msg {
             Message::SpikeEvent { amplitude, .. } => Some(*amplitude),
             _ => None,
         })

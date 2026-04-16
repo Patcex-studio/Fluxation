@@ -61,8 +61,8 @@ pub async fn collect_error_feedback_from_bus(
     for &id in agent_ids {
         let msgs = bus.receive(id).await?;
         let mut last_err = None;
-        for m in msgs {
-            if let Message::Error(e) = m {
+        for (_sender, msg) in msgs {
+            if let Message::Error(e) = msg {
                 last_err = Some(e);
             }
         }

@@ -18,6 +18,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
+use std::collections::HashMap;
 
 use crate::agent::blueprint::base::AgentBlueprint;
 use crate::agent::state::{AgentUpdateResult, RoleType};
@@ -26,24 +27,64 @@ use crate::core::topology::{TopologyChange, ZoooidTopology};
 use crate::memory::types::MemoryPayload;
 use crate::primitives::base::PrimitiveMessage;
 use crate::primitives::spiking::izhikevich::{IzhikevichNeuron, IzhikevichParams, IzhikevichState};
+use crate::utils::types::ZoooidId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitivezooidParams {
     pub izh_params: IzhikevichParams,
     #[serde(default = "default_connection_request_interval")]
     pub connection_request_interval: u64,
+    #[serde(default = "default_stdp_a_plus")]
+    pub stdp_a_plus: f32,
+    #[serde(default = "default_stdp_a_minus")]
+    pub stdp_a_minus: f32,
+    #[serde(default = "default_stdp_tau_plus")]
+    pub stdp_tau_plus: f32,
+    #[serde(default = "default_stdp_tau_minus")]
+    pub stdp_tau_minus: f32,
+    #[serde(default = "default_weight_decay")]
+    pub weight_decay: f32,
+    #[serde(default = "default_pruning_threshold")]
+    pub pruning_threshold: f32,
 }
 
 fn default_connection_request_interval() -> u64 {
     10
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn default_stdp_a_plus() -> f32 {
+    0.01
+}
+
+fn default_stdp_a_minus() -> f32 {
+    0.005
+}
+
+fn default_stdp_tau_plus() -> f32 {
+    20.0
+}
+
+fn default_stdp_tau_minus() -> f32 {
+    20.0
+}
+
+fn default_weight_decay() -> f32 {
+    0.0001
+}
+
+fn default_pruning_threshold() -> f32 {
+    0.001
+}
+
+#[derive(Debug, Clone)]
 pub struct CognitivezooidState {
     pub izh_state: IzhikevichState,
     pub izh_params: IzhikevichParams, // Add params to state for learning
     pub tick_count: u64,
     pub spike_count: u64, // Add spike counter
+    pub last_pre_spike_times: HashMap<ZoooidId, u64>, // For STDP
+    pub incoming_senders: Vec<ZoooidId>, // For indexing weights
+    pub synaptic_weights: Vec<f32>, // Synaptic weights for STDP
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,13 +105,16 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             izh_params: self.params.izh_params.clone(), // Store params in state
             tick_count: 0,
             spike_count: 0,
+            last_pre_spike_times: HashMap::new(),
+            incoming_senders: Vec::new(),
+            synaptic_weights: Vec::new(),
         }))
     }
 
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(ZoooidId, Message)>,
         topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -80,9 +124,20 @@ impl AgentBlueprint for CognitivezooidBlueprint {
 
         state.tick_count += 1;
 
+        // Update last pre-spike times for incoming spikes
+        for (sender, msg) in &inputs {
+            if let Message::SpikeEvent { .. } = msg {
+                state.last_pre_spike_times.insert(*sender, state.tick_count);
+                if !state.incoming_senders.contains(sender) {
+                    state.incoming_senders.push(*sender);
+                    state.synaptic_weights.push(0.1);
+                }
+            }
+        }
+
         let primitive_inputs: Vec<PrimitiveMessage> = inputs
             .into_iter()
-            .filter_map(|msg| match msg {
+            .filter_map(|(_sender, msg)| match msg {
                 Message::AnalogInput(value) => Some(PrimitiveMessage::InputCurrent(value)),
                 _ => None,
             })
@@ -98,9 +153,29 @@ impl AgentBlueprint for CognitivezooidBlueprint {
         state.izh_state = new_izh_state;
 
         // Count spikes
+        let has_spiked = primitive_outputs.iter().any(|prim_msg| matches!(prim_msg, PrimitiveMessage::Spike { .. }));
         for prim_msg in &primitive_outputs {
             if let PrimitiveMessage::Spike { .. } = prim_msg {
                 state.spike_count += 1;
+            }
+        }
+
+        // Apply STDP if spiked
+        if has_spiked {
+            for (i, &sender) in state.incoming_senders.iter().enumerate() {
+                if let Some(&pre_time) = state.last_pre_spike_times.get(&sender) {
+                    let delta_t = (state.tick_count as f32) - (pre_time as f32);
+                    let dw = if delta_t > 0.0 {
+                        self.params.stdp_a_plus * (-delta_t / self.params.stdp_tau_plus).exp()
+                    } else {
+                        -self.params.stdp_a_minus * (delta_t.abs() / self.params.stdp_tau_minus).exp()
+                    };
+                    state.synaptic_weights[i] += dw;
+                    state.synaptic_weights[i] *= 1.0 - self.params.weight_decay;
+                    if state.synaptic_weights[i].abs() < self.params.pruning_threshold {
+                        state.synaptic_weights[i] = 0.0;
+                    }
+                }
             }
         }
 
