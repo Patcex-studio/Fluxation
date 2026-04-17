@@ -259,7 +259,7 @@ mod mnist_architecture {
             let mut total_input: f32 = 0.0;
             let mut control_adjustment: f32 = 0.0;
 
-            for (sender, message) in inputs {
+            for (_sender, message) in inputs {
                 match message {
                     Message::SpikeEvent { amplitude, .. } => {
                         total_input += amplitude;

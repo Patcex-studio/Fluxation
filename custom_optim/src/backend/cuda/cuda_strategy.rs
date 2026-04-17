@@ -17,7 +17,7 @@
 
 use crate::{optimizer::{OptimizerConfig, OptimizerError}, strategy::OptimizerStrategy, utils::finite_difference_gradient};
 use crate::backend::cuda::kernels;
-use rand::random;
+use rand::{distr::{Distribution, Uniform}};
 
 pub struct CudaSGD {
     pub learning_rate: f32,
@@ -86,9 +86,11 @@ impl CudaGeneticAlgorithm {
     }
 
     fn mutate(&self, individual: &mut [f32]) {
+        let mut rng = rand::rng();
+        let uniform = Uniform::new(0.0_f32, 1.0_f32).unwrap();
         for x in individual.iter_mut() {
-            if rand::random::<f32>() < self.mutation_rate {
-                *x += (rand::random::<f32>() - 0.5) * 0.1;
+            if uniform.sample(&mut rng) < self.mutation_rate {
+                *x += (uniform.sample(&mut rng) - 0.5) * 0.1;
             }
         }
     }
@@ -108,8 +110,10 @@ impl OptimizerStrategy for CudaGeneticAlgorithm {
             return Ok(());
         }
 
+        let mut rng = rand::rng();
+        let uniform = Uniform::new(0.0_f32, 1.0_f32).unwrap();
         let mut population: Vec<Vec<f32>> = (0..self.population_size)
-            .map(|_| params.iter().map(|v| *v + (rand::random::<f32>() - 0.5) * 0.1).collect())
+            .map(|_| params.iter().map(|v| *v + (uniform.sample(&mut rng) - 0.5) * 0.1).collect())
             .collect();
 
         let mut losses = vec![0.0_f32; self.population_size];
@@ -145,9 +149,11 @@ impl OptimizerStrategy for CudaGeneticAlgorithm {
             population.clear();
             population.extend(scored.iter().take(2).map(|(_, ind)| ind.clone()));
 
+            let mut rng = rand::rng();
+            let between = Uniform::new(0, scored.len()).unwrap();
             while population.len() < self.population_size {
-                let parent_a = &scored[rand::random::<usize>() % scored.len()].1;
-                let parent_b = &scored[rand::random::<usize>() % scored.len()].1;
+                let parent_a = &scored[between.sample(&mut rng)].1;
+                let parent_b = &scored[between.sample(&mut rng)].1;
                 let mut child = vec![0.0_f32; dim];
                 self.crossover(parent_a, parent_b, &mut child);
                 self.mutate(&mut child);

@@ -83,7 +83,7 @@ impl AgentBlueprint for SpikingNeuronBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(uuid::Uuid, Message)>,
         topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -96,7 +96,7 @@ impl AgentBlueprint for SpikingNeuronBlueprint {
         let mut total_input: f32 = 0.0;
         let mut control_adjustment: f32 = 0.0;
 
-        for message in inputs {
+        for (_, message) in inputs {
             match message {
                 Message::SpikeEvent { amplitude, .. } => {
                     total_input += amplitude;
@@ -361,7 +361,7 @@ impl adaptiflux_core::memory::ExperienceRecorder for OutputExperienceRecorder {
         &self,
         agent_id: ZoooidId,
         iteration: u64,
-        inputs: &[Message],
+        inputs: &[(uuid::Uuid, Message)],
         state: &dyn Any,
         _result: &AgentUpdateResult,
         store: &mut TableLongTermStore,
@@ -377,8 +377,8 @@ impl adaptiflux_core::memory::ExperienceRecorder for OutputExperienceRecorder {
                 output_state.spike_count as f32,
                 inputs
                     .iter()
-                    .filter_map(|m| match m {
-                        Message::SpikeEvent { amplitude, .. } => Some(*amplitude),
+                    .filter_map(|(_, m)| match m {
+                        Message::SpikeEvent { amplitude, .. } => Some(amplitude),
                         _ => None,
                     })
                     .sum(),

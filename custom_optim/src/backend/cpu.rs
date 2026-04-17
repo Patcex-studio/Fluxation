@@ -17,6 +17,7 @@
 
 use crate::{optimizer::OptimizerConfig, strategy::OptimizerStrategy, OptimizerError};
 use crate::utils::finite_difference_gradient;
+use rand::{distr::{Distribution, Uniform}};
 
 pub struct SGD {
     pub learning_rate: f32,
@@ -66,9 +67,11 @@ impl GeneticAlgorithm {
     }
 
     fn mutate(&self, individual: &mut [f32]) {
+        let mut rng = rand::rng();
+        let uniform = Uniform::new(0.0_f32, 1.0_f32).unwrap();
         for x in individual.iter_mut() {
-            if rand::random::<f32>() < self.mutation_rate {
-                *x += (rand::random::<f32>() - 0.5) * 0.1;
+            if uniform.sample(&mut rng) < self.mutation_rate {
+                *x += (uniform.sample(&mut rng) - 0.5) * 0.1;
             }
         }
     }
@@ -84,8 +87,10 @@ impl GeneticAlgorithm {
 impl OptimizerStrategy for GeneticAlgorithm {
     fn optimize(&mut self, params: &mut [f32], loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError> {
         let dim = params.len();
+        let mut rng = rand::rng();
+        let uniform = Uniform::new(0.0_f32, 1.0_f32).unwrap();
         let mut population: Vec<Vec<f32>> = (0..self.population_size)
-            .map(|_| params.iter().map(|v| *v + (rand::random::<f32>() - 0.5) * 0.1).collect())
+            .map(|_| params.iter().map(|v| *v + (uniform.sample(&mut rng) - 0.5) * 0.1).collect())
             .collect();
 
         for _ in 0..self.generations {
@@ -98,9 +103,11 @@ impl OptimizerStrategy for GeneticAlgorithm {
             let elites = scored.iter().take(2).map(|(_, ind)| ind.clone()).collect::<Vec<_>>();
             population.extend(elites.clone());
 
+            let mut rng = rand::rng();
+            let between = Uniform::new(0, scored.len()).unwrap();
             while population.len() < self.population_size {
-                let parent_a = &scored[rand::random::<usize>() % scored.len()].1;
-                let parent_b = &scored[rand::random::<usize>() % scored.len()].1;
+                let parent_a = &scored[between.sample(&mut rng)].1;
+                let parent_b = &scored[between.sample(&mut rng)].1;
                 let mut child = vec![0.0; dim];
                 self.crossover(parent_a, parent_b, &mut child);
                 self.mutate(&mut child);

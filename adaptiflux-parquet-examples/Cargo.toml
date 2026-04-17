@@ -1,0 +1,29 @@
+[package]
+name = "adaptiflux-parquet-examples"
+version = "0.1.0"
+edition = "2021"
+authors = ["adaptiflux"]
+description = "Parquet-based MNIST loading examples for Adaptiflux. This package isolates parquet/arrow dependencies away from adaptiflux-core."
+license-file = "../adaptiflux-core/LICENSE"
+repository = "https://github.com/adaptiflux/adaptiflux-core"
+
+[dependencies]
+adaptiflux-core = { path = "../adaptiflux-core", version = "1.0.0" }
+parquet = "12.0"
+image = "0.24"
+rayon = "1.7"
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.42", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+sysinfo = "0.33"
+num_cpus = "1.17"
+uuid = { version = "1.4", features = ["v4"] }
+
+[features]
+default = []
+
+[profile.release]
+debug = true

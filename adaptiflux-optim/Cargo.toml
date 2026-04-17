@@ -11,5 +11,4 @@ name = "adaptiflux_optim"
 crate-type = ["rlib"]
 
 [dependencies]
-rand = "0.8"
 wide = "0.7"
