@@ -25,7 +25,10 @@ pub use cuda_strategy::{CudaGeneticAlgorithm, CudaSGD};
 
 #[cfg(not(feature = "cuda"))]
 pub mod cuda_strategy {
-    use crate::{optimizer::{OptimizerConfig, OptimizerError}, strategy::OptimizerStrategy};
+    use crate::{
+        optimizer::{OptimizerConfig, OptimizerError},
+        strategy::OptimizerStrategy,
+    };
 
     pub struct CudaSGD;
     pub struct CudaGeneticAlgorithm;
@@ -43,13 +46,21 @@ pub mod cuda_strategy {
     }
 
     impl OptimizerStrategy for CudaSGD {
-        fn optimize(&mut self, _params: &mut [f32], _loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError> {
+        fn optimize(
+            &mut self,
+            _params: &mut [f32],
+            _loss_fn: &dyn Fn(&[f32]) -> f32,
+        ) -> Result<(), OptimizerError> {
             Err(OptimizerError::Unsupported)
         }
     }
 
     impl OptimizerStrategy for CudaGeneticAlgorithm {
-        fn optimize(&mut self, _params: &mut [f32], _loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError> {
+        fn optimize(
+            &mut self,
+            _params: &mut [f32],
+            _loss_fn: &dyn Fn(&[f32]) -> f32,
+        ) -> Result<(), OptimizerError> {
             Err(OptimizerError::Unsupported)
         }
     }

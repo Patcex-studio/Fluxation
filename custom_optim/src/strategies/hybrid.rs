@@ -15,7 +15,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0 OR Commercial
 
-use crate::{backend::{cpu, cuda}, optimizer::{BackendType, OptimizerConfig, OptimizerError}, strategy::OptimizerStrategy};
+use crate::{
+    backend::{cpu, cuda},
+    optimizer::{BackendType, OptimizerConfig, OptimizerError},
+    strategy::OptimizerStrategy,
+};
 
 pub struct HybridStrategy {
     pub ga: Box<dyn OptimizerStrategy>,
@@ -40,7 +44,11 @@ impl HybridStrategy {
 }
 
 impl OptimizerStrategy for HybridStrategy {
-    fn optimize(&mut self, params: &mut [f32], loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError> {
+    fn optimize(
+        &mut self,
+        params: &mut [f32],
+        loss_fn: &dyn Fn(&[f32]) -> f32,
+    ) -> Result<(), OptimizerError> {
         self.ga.optimize(params, loss_fn)?;
         self.sgd.optimize(params, loss_fn)
     }

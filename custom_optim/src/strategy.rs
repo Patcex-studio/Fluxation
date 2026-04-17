@@ -18,5 +18,9 @@
 use crate::optimizer::OptimizerError;
 
 pub trait OptimizerStrategy: Send + Sync {
-    fn optimize(&mut self, params: &mut [f32], loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError>;
+    fn optimize(
+        &mut self,
+        params: &mut [f32],
+        loss_fn: &dyn Fn(&[f32]) -> f32,
+    ) -> Result<(), OptimizerError>;
 }

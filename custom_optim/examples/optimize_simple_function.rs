@@ -25,6 +25,7 @@ fn main() {
         learning_rate: Some(0.05),
         generations: None,
         iterations: Some(50),
+        block_size: None,
     };
 
     let mut optimizer = Optimizer::new(config).expect("Failed to create optimizer");
@@ -36,6 +37,8 @@ fn main() {
         a * a + b * b + c * c
     };
 
-    optimizer.optimize(&mut params, &loss).expect("Optimization failed");
+    optimizer
+        .optimize(&mut params, &loss)
+        .expect("Optimization failed");
     println!("Optimized params: {:?}", params);
 }

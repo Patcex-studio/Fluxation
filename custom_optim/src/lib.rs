@@ -17,9 +17,11 @@
 
 pub mod backend;
 pub mod optimizer;
-pub mod strategy;
 pub mod strategies;
+pub mod strategy;
 pub mod utils;
 
-pub use optimizer::{BackendType, Optimizer, OptimizerConfig, OptimizerError, OptimizerStrategyType};
+pub use optimizer::{
+    BackendType, Optimizer, OptimizerConfig, OptimizerError, OptimizerStrategyType,
+};
 pub use strategy::OptimizerStrategy;

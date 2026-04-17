@@ -15,9 +15,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0 OR Commercial
 
-use crate::{optimizer::OptimizerConfig, strategy::OptimizerStrategy, OptimizerError};
 use crate::utils::finite_difference_gradient;
-use rand::{distr::{Distribution, Uniform}};
+use crate::{optimizer::OptimizerConfig, strategy::OptimizerStrategy, OptimizerError};
+use rand::distr::{Distribution, Uniform};
 
 pub struct SGD {
     pub learning_rate: f32,
@@ -36,7 +36,11 @@ impl SGD {
 }
 
 impl OptimizerStrategy for SGD {
-    fn optimize(&mut self, params: &mut [f32], loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError> {
+    fn optimize(
+        &mut self,
+        params: &mut [f32],
+        loss_fn: &dyn Fn(&[f32]) -> f32,
+    ) -> Result<(), OptimizerError> {
         for _ in 0..self.iterations {
             let gradient = finite_difference_gradient(params, loss_fn, 1e-3);
             for (p, g) in params.iter_mut().zip(gradient.iter()) {
@@ -56,7 +60,9 @@ pub struct GeneticAlgorithm {
 
 impl GeneticAlgorithm {
     pub fn new(config: OptimizerConfig) -> Result<Self, OptimizerError> {
-        let population_size = config.population_size.ok_or(OptimizerError::InvalidConfig)?;
+        let population_size = config
+            .population_size
+            .ok_or(OptimizerError::InvalidConfig)?;
         let generations = config.generations.ok_or(OptimizerError::InvalidConfig)?;
         Ok(Self {
             population_size,
@@ -85,12 +91,21 @@ impl GeneticAlgorithm {
 }
 
 impl OptimizerStrategy for GeneticAlgorithm {
-    fn optimize(&mut self, params: &mut [f32], loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError> {
+    fn optimize(
+        &mut self,
+        params: &mut [f32],
+        loss_fn: &dyn Fn(&[f32]) -> f32,
+    ) -> Result<(), OptimizerError> {
         let dim = params.len();
         let mut rng = rand::rng();
         let uniform = Uniform::new(0.0_f32, 1.0_f32).unwrap();
         let mut population: Vec<Vec<f32>> = (0..self.population_size)
-            .map(|_| params.iter().map(|v| *v + (uniform.sample(&mut rng) - 0.5) * 0.1).collect())
+            .map(|_| {
+                params
+                    .iter()
+                    .map(|v| *v + (uniform.sample(&mut rng) - 0.5) * 0.1)
+                    .collect()
+            })
             .collect();
 
         for _ in 0..self.generations {
@@ -100,7 +115,11 @@ impl OptimizerStrategy for GeneticAlgorithm {
                 .collect();
             scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
             population.clear();
-            let elites = scored.iter().take(2).map(|(_, ind)| ind.clone()).collect::<Vec<_>>();
+            let elites = scored
+                .iter()
+                .take(2)
+                .map(|(_, ind)| ind.clone())
+                .collect::<Vec<_>>();
             population.extend(elites.clone());
 
             let mut rng = rand::rng();
@@ -115,10 +134,11 @@ impl OptimizerStrategy for GeneticAlgorithm {
             }
         }
 
-        if let Some(best) = population
-            .iter()
-            .min_by(|a, b| loss_fn(a).partial_cmp(&loss_fn(b)).unwrap_or(std::cmp::Ordering::Equal))
-        {
+        if let Some(best) = population.iter().min_by(|a, b| {
+            loss_fn(a)
+                .partial_cmp(&loss_fn(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             params.copy_from_slice(best);
         }
         Ok(())

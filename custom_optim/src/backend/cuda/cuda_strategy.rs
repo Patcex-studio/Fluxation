@@ -15,22 +15,105 @@
 //
 // SPDX-License-Identifier: AGPL-3.0 OR Commercial
 
-use crate::{optimizer::{OptimizerConfig, OptimizerError}, strategy::OptimizerStrategy, utils::finite_difference_gradient};
 use crate::backend::cuda::kernels;
-use rand::{distr::{Distribution, Uniform}};
+use crate::{
+    optimizer::{OptimizerConfig, OptimizerError},
+    strategy::OptimizerStrategy,
+    utils::finite_difference_gradient,
+};
+use libc::c_char;
+use rand::distr::{Distribution, Uniform};
+use std::{ffi::CStr, ptr::NonNull};
+
+#[cfg(feature = "cuda")]
+#[derive(Debug)]
+pub struct CudaOptimizerState {
+    raw: NonNull<libc::c_void>,
+    len: usize,
+    block_size: u32,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaOptimizerState {
+    pub fn new(params: &mut [f32], block_size: u32) -> Result<Self, String> {
+        let mut raw_state: *mut libc::c_void = std::ptr::null_mut();
+        let status = unsafe {
+            kernels::cuda_init_cuda_optimizer_state(
+                params.as_ptr(),
+                params.len() as u32,
+                block_size,
+                &mut raw_state,
+            )
+        };
+        if status != 0 {
+            return Err(Self::format_cuda_error(status));
+        }
+
+        let raw = NonNull::new(raw_state)
+            .ok_or_else(|| "Failed to initialize CUDA optimizer state".to_string())?;
+
+        Ok(Self {
+            raw,
+            len: params.len(),
+            block_size,
+        })
+    }
+
+    pub fn step(&mut self, params: &mut [f32], gradient: &[f32], lr: f32) -> Result<(), String> {
+        if params.len() != self.len || gradient.len() != self.len {
+            return Err("CUDA optimizer state length mismatch".into());
+        }
+
+        let status = unsafe {
+            kernels::cuda_sgd_step_with_state_wrapper(
+                self.raw.as_ptr(),
+                params.as_mut_ptr(),
+                gradient.as_ptr(),
+                lr,
+                1,
+            )
+        };
+        if status != 0 {
+            return Err(Self::format_cuda_error(status));
+        }
+        Ok(())
+    }
+
+    fn format_cuda_error(code: i32) -> String {
+        unsafe {
+            let message_ptr = kernels::cuda_error_message_wrapper(code);
+            if message_ptr.is_null() {
+                return format!("CUDA error code {}", code);
+            }
+            CStr::from_ptr(message_ptr).to_string_lossy().into_owned()
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for CudaOptimizerState {
+    fn drop(&mut self) {
+        unsafe {
+            kernels::cuda_free_optimizer_state(self.raw.as_ptr());
+        }
+    }
+}
 
 pub struct CudaSGD {
     pub learning_rate: f32,
     pub iterations: usize,
+    pub block_size: u32,
 }
 
 impl CudaSGD {
     pub fn new(config: OptimizerConfig) -> Result<Self, OptimizerError> {
         let learning_rate = config.learning_rate.unwrap_or(0.01);
         let iterations = config.iterations.unwrap_or(50);
+        let block_size = config.block_size.unwrap_or(0);
         Ok(Self {
             learning_rate,
             iterations,
+            block_size,
         })
     }
 
@@ -40,26 +123,20 @@ impl CudaSGD {
 }
 
 impl OptimizerStrategy for CudaSGD {
-    fn optimize(&mut self, params: &mut [f32], loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError> {
+    fn optimize(
+        &mut self,
+        params: &mut [f32],
+        loss_fn: &dyn Fn(&[f32]) -> f32,
+    ) -> Result<(), OptimizerError> {
         self.initialize()?;
+        let mut state =
+            CudaOptimizerState::new(params, self.block_size).map_err(OptimizerError::CudaError)?;
 
         for _ in 0..self.iterations {
             let gradient = finite_difference_gradient(params, loss_fn, 1e-4);
-            // SAFETY: Вызов CUDA ядра через FFI
-            // - params.as_mut_ptr() гарантирует, что указатель действителен на время вызова
-            // - gradient.as_ptr() гарантирует, что указатель действителен на время вызова
-            // - params.len() корректно преобразуется в u32
-            // - Ядро CUDA не сохраняет указатели после завершения
-            let result = unsafe {
-                kernels::cuda_sgd_step_kernel_wrapper(
-                    params.as_mut_ptr(),
-                    gradient.as_ptr(),
-                    self.learning_rate,
-                    params.len() as u32,
-                )
-            };
-            if result != 0 {
-                return Err(OptimizerError::KernelLaunchFailed);
+            let result = state.step(params, &gradient, self.learning_rate);
+            if let Err(error_message) = result {
+                return Err(OptimizerError::CudaError(error_message));
             }
         }
         Ok(())
@@ -75,7 +152,9 @@ pub struct CudaGeneticAlgorithm {
 
 impl CudaGeneticAlgorithm {
     pub fn new(config: OptimizerConfig) -> Result<Self, OptimizerError> {
-        let population_size = config.population_size.ok_or(OptimizerError::InvalidConfig)?;
+        let population_size = config
+            .population_size
+            .ok_or(OptimizerError::InvalidConfig)?;
         let generations = config.generations.ok_or(OptimizerError::InvalidConfig)?;
         Ok(Self {
             population_size,
@@ -104,7 +183,11 @@ impl CudaGeneticAlgorithm {
 }
 
 impl OptimizerStrategy for CudaGeneticAlgorithm {
-    fn optimize(&mut self, params: &mut [f32], loss_fn: &dyn Fn(&[f32]) -> f32) -> Result<(), OptimizerError> {
+    fn optimize(
+        &mut self,
+        params: &mut [f32],
+        loss_fn: &dyn Fn(&[f32]) -> f32,
+    ) -> Result<(), OptimizerError> {
         let dim = params.len();
         if dim == 0 {
             return Ok(());
@@ -113,7 +196,12 @@ impl OptimizerStrategy for CudaGeneticAlgorithm {
         let mut rng = rand::rng();
         let uniform = Uniform::new(0.0_f32, 1.0_f32).unwrap();
         let mut population: Vec<Vec<f32>> = (0..self.population_size)
-            .map(|_| params.iter().map(|v| *v + (uniform.sample(&mut rng) - 0.5) * 0.1).collect())
+            .map(|_| {
+                params
+                    .iter()
+                    .map(|v| *v + (uniform.sample(&mut rng) - 0.5) * 0.1)
+                    .collect()
+            })
             .collect();
 
         let mut losses = vec![0.0_f32; self.population_size];
@@ -124,21 +212,19 @@ impl OptimizerStrategy for CudaGeneticAlgorithm {
                 flat[start..start + dim].copy_from_slice(individual);
             }
 
-            // SAFETY: Вызов CUDA ядра через FFI
-            // - flat.as_ptr() гарантирует, что указатель действителен на время вызова
-            // - losses.as_mut_ptr() гарантирует, что указатель действителен на время вызова
-            // - dim и population_size корректно преобразуются в u32
-            // - Ядро CUDA не сохраняет указатели после завершения
             let result = unsafe {
                 kernels::cuda_compute_squared_norms_kernel_wrapper(
                     flat.as_ptr(),
                     losses.as_mut_ptr(),
                     dim as u32,
                     self.population_size as u32,
+                    0,
                 )
             };
             if result != 0 {
-                return Err(OptimizerError::KernelLaunchFailed);
+                return Err(OptimizerError::CudaError(
+                    CudaOptimizerState::format_cuda_error(result),
+                ));
             }
 
             let mut scored: Vec<(f32, Vec<f32>)> = population
@@ -161,10 +247,11 @@ impl OptimizerStrategy for CudaGeneticAlgorithm {
             }
         }
 
-        if let Some(best) = population
-            .iter()
-            .min_by(|a, b| loss_fn(a).partial_cmp(&loss_fn(b)).unwrap_or(std::cmp::Ordering::Equal))
-        {
+        if let Some(best) = population.iter().min_by(|a, b| {
+            loss_fn(a)
+                .partial_cmp(&loss_fn(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             params.copy_from_slice(best);
         }
         Ok(())

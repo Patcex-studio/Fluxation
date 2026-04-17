@@ -22,6 +22,7 @@ extern "C" {
         grad_ptr: *const f32,
         lr: f32,
         n: u32,
+        block_size: u32,
     ) -> i32;
 
     pub fn cuda_compute_squared_norms_kernel_wrapper(
@@ -29,5 +30,25 @@ extern "C" {
         losses_ptr: *mut f32,
         num_params: u32,
         pop_size: u32,
+        block_size: u32,
     ) -> i32;
+
+    pub fn cuda_error_message_wrapper(error_code: i32) -> *const libc::c_char;
+
+    pub fn cuda_init_cuda_optimizer_state(
+        params_ptr: *const f32,
+        len: u32,
+        block_size: u32,
+        out_state: *mut *mut libc::c_void,
+    ) -> i32;
+
+    pub fn cuda_sgd_step_with_state_wrapper(
+        state: *mut libc::c_void,
+        params_ptr: *mut f32,
+        grad_ptr: *const f32,
+        lr: f32,
+        copy_back: i32,
+    ) -> i32;
+
+    pub fn cuda_free_optimizer_state(state: *mut libc::c_void) -> i32;
 }

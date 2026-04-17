@@ -26,6 +26,7 @@ fn sgd_minimizes_quadratic() {
         learning_rate: Some(0.2),
         generations: None,
         iterations: Some(200),
+        block_size: None,
     };
     let mut optimizer = Optimizer::new(config).unwrap();
     let mut params = [5.0_f32, -5.0, 10.0];
@@ -50,6 +51,7 @@ fn hybrid_strategy_combines_ga_and_sgd() {
         learning_rate: Some(0.05),
         generations: Some(3),
         iterations: Some(50),
+        block_size: None,
     };
     let mut optimizer = Optimizer::new(config).unwrap();
     let mut params = [2.0_f32, -1.5, 4.0];
@@ -62,7 +64,11 @@ fn hybrid_strategy_combines_ga_and_sgd() {
 
     optimizer.optimize(&mut params, &loss).unwrap();
     let final_loss = loss(&params);
-    assert!(final_loss < 5.0, "hybrid optimizer did not improve enough: {}", final_loss);
+    assert!(
+        final_loss < 5.0,
+        "hybrid optimizer did not improve enough: {}",
+        final_loss
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -75,6 +81,7 @@ fn cuda_sgd_kernel_wrapper_exists() {
         learning_rate: Some(0.1),
         generations: None,
         iterations: Some(1),
+        block_size: Some(256),
     };
     let mut optimizer = Optimizer::new(config).unwrap();
     let mut params = [0.5_f32, -0.3, 0.8];

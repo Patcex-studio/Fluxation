@@ -15,7 +15,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0 OR Commercial
 
-use crate::backend::{cuda, cpu};
+use crate::backend::{cpu, cuda};
 use crate::strategy::OptimizerStrategy;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,7 @@ pub struct OptimizerConfig {
     pub learning_rate: Option<f32>,
     pub generations: Option<usize>,
     pub iterations: Option<usize>,
+    pub block_size: Option<u32>,
 }
 
 pub struct Optimizer {
@@ -42,14 +43,18 @@ impl Optimizer {
             (OptimizerStrategyType::Genetic, BackendType::CUDA) => {
                 Box::new(cuda::CudaGeneticAlgorithm::new(config.clone())?)
             }
-            (OptimizerStrategyType::SGD, BackendType::CPU) => Box::new(cpu::SGD::new(config.clone())?),
-            (OptimizerStrategyType::SGD, BackendType::CUDA) => Box::new(cuda::CudaSGD::new(config.clone())?),
-            (OptimizerStrategyType::Hybrid, BackendType::CPU) => {
-                Box::new(crate::strategies::hybrid::HybridStrategy::new(config.clone(), BackendType::CPU)?)
+            (OptimizerStrategyType::SGD, BackendType::CPU) => {
+                Box::new(cpu::SGD::new(config.clone())?)
             }
-            (OptimizerStrategyType::Hybrid, BackendType::CUDA) => {
-                Box::new(crate::strategies::hybrid::HybridStrategy::new(config.clone(), BackendType::CUDA)?)
+            (OptimizerStrategyType::SGD, BackendType::CUDA) => {
+                Box::new(cuda::CudaSGD::new(config.clone())?)
             }
+            (OptimizerStrategyType::Hybrid, BackendType::CPU) => Box::new(
+                crate::strategies::hybrid::HybridStrategy::new(config.clone(), BackendType::CPU)?,
+            ),
+            (OptimizerStrategyType::Hybrid, BackendType::CUDA) => Box::new(
+                crate::strategies::hybrid::HybridStrategy::new(config.clone(), BackendType::CUDA)?,
+            ),
         };
         Ok(Self { strategy })
     }
@@ -80,6 +85,8 @@ pub enum BackendType {
 pub enum OptimizerError {
     #[error("CUDA initialization failed")]
     CudaInitializationFailed,
+    #[error("CUDA error: {0}")]
+    CudaError(String),
     #[error("Kernel launch failed")]
     KernelLaunchFailed,
     #[error("Invalid optimizer configuration")]
