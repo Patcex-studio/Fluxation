@@ -28,7 +28,7 @@ pub struct HybridStrategy {
 
 impl HybridStrategy {
     pub fn new(config: OptimizerConfig, backend: BackendType) -> Result<Self, OptimizerError> {
-        let ga_backend = backend.clone();
+        let ga_backend = backend;
         let sgd_backend = backend;
 
         let ga: Box<dyn OptimizerStrategy> = match ga_backend {

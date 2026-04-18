@@ -26,7 +26,7 @@ pub struct GpuResourceManager {
 }
 
 impl GpuResourceManager {
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let gpu_context = GpuContext::new().await?;
         Ok(Self {
             gpu_context,

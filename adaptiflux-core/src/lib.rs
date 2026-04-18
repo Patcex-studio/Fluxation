@@ -110,6 +110,7 @@
 //! The library depends on several crates for concurrency, data structures, and optimization.
 //! See `Cargo.toml` for the full list.
 
+pub mod accelerator;
 pub mod agent;
 pub mod attention;
 pub mod core;
@@ -128,6 +129,10 @@ pub mod utils;
 pub mod gpu;
 
 pub use crate::agent::{AgentBlueprint, AgentUpdateResult, RoleType, Zoooid};
+pub use crate::accelerator::{
+    AcceleratorBackend, AcceleratorConfig, AcceleratorFactory, AcceleratorPool, AcceleratorType,
+    BatchSizes, CpuBackend, GpuBackendWgpu, LoadBalancingStrategy, ShaderRunner,
+};
 pub use crate::core::message_bus::{LocalBus, Message, MessageBus};
 pub use crate::core::topology::{
     ConnectionProperties, SystemMetrics, TopologyChange, ZoooidTopology,

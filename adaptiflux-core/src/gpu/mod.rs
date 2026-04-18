@@ -16,15 +16,25 @@
 // SPDX-License-Identifier: AGPL-3.0 OR Commercial
 
 pub mod buffer_manager;
+pub mod config;
 pub mod context;
 pub mod primitive_wrappers;
 pub mod resource_manager;
 pub mod shader_runner;
+pub mod shaders;
 
 pub use buffer_manager::BufferManager;
-pub use context::GpuContext;
+pub use config::GpuConfig;
+pub use context::{GpuContext, GpuDeviceInfo};
 pub use primitive_wrappers::{
     BatchIzhikevichParams, BatchIzhikevichPrimitive, BatchIzhikevichState,
 };
 pub use resource_manager::GpuResourceManager;
 pub use shader_runner::ShaderRunner;
+pub use shaders::{
+    AGENT_UPDATE_SHADER, CONNECTION_CALCULATE_SHADER, HORMONE_SIMULATION_SHADER,
+    LIF_UPDATE_SHADER, PLASTICITY_PRUNING_SHADER, PLASTICITY_SYNAPTOGENESIS_SHADER,
+};
+
+#[cfg(test)]
+mod tests;

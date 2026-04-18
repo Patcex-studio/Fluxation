@@ -25,7 +25,8 @@ petgraph = "0.7"
 uuid = { version = "1.4", features = ["v4"] }
 thiserror = "1.0"
 num_cpus = "1.17"
-wgpu = { version = "0.20", optional = true }
+wgpu = { version = "0.20.1", optional = true, features = ["metal", "dx12", "vulkan-portability", "glsl"] }
+futures = { version = "0.3", features = ["executor"] }
 image = "0.24"
 sysinfo = "0.33"
 mnist = "0.5"
@@ -41,7 +42,10 @@ clap = { version = "3.2", features = ["derive"] }
 
 [features]
 default = []
-gpu = ["wgpu", "custom_optim/cuda"]
+# GPU acceleration via wgpu/Metal/Vulkan/DX12, no CUDA dependency by default
+gpu = ["wgpu"]
+# Optional CUDA backend for users with NVIDIA toolchain
+gpu_cuda = ["wgpu", "custom_optim/cuda"]
 cpu_only = ["custom_optim/cpu"]
 custom_optim = ["custom_optim/cpu"]
 adaptiflux_optim = ["adaptiflux-optim"]

@@ -51,6 +51,8 @@ use crate::utils::types::{new_zoooid_id, StateValue, ZoooidId};
 
 #[cfg(feature = "gpu")]
 use crate::gpu::resource_manager::GpuResourceManager;
+#[cfg(feature = "gpu")]
+use crate::gpu::GpuConfig;
 
 /// Optional online learning pass (parameter adaptation after agent updates).
 pub struct OnlineAdaptationHook {
@@ -150,6 +152,10 @@ pub struct CoreScheduler {
     #[cfg(feature = "gpu")]
     pub gpu_resource_manager: Option<Arc<Mutex<GpuResourceManager>>>,
 
+    /// GPU acceleration configuration
+    #[cfg(feature = "gpu")]
+    pub gpu_config: GpuConfig,
+
     /// Configuration for asynchronous optimization tasks
     pub async_optimization: Option<AsyncOptimizationConfig>,
     /// Hook for sparse execution optimization
@@ -235,6 +241,8 @@ impl CoreScheduler {
             power_monitor: None,
             #[cfg(feature = "gpu")]
             gpu_resource_manager: None,
+            #[cfg(feature = "gpu")]
+            gpu_config: GpuConfig::default(),
         }
     }
 
@@ -265,6 +273,7 @@ impl CoreScheduler {
             sleep_scheduler: None,
             power_monitor: None,
             gpu_resource_manager,
+            gpu_config: GpuConfig::default(),
         }
     }
 
@@ -294,6 +303,23 @@ impl CoreScheduler {
     /// Attach an optional power monitor.
     pub fn enable_power_monitor(&mut self, monitor: PowerMonitor) {
         self.power_monitor = Some(monitor);
+    }
+
+    /// Configure GPU acceleration settings (requires "gpu" feature)
+    #[cfg(feature = "gpu")]
+    pub fn set_gpu_config(&mut self, config: GpuConfig) {
+        self.gpu_config = config;
+        if self.gpu_config.is_gpu_enabled() {
+            info!("GPU acceleration enabled with config: {:?}", self.gpu_config);
+        } else {
+            info!("GPU acceleration disabled");
+        }
+    }
+
+    /// Get current GPU configuration (requires "gpu" feature)
+    #[cfg(feature = "gpu")]
+    pub fn get_gpu_config(&self) -> &GpuConfig {
+        &self.gpu_config
     }
 
     /// Enable asynchronous optimization integration

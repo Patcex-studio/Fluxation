@@ -177,20 +177,17 @@ extern "C" {
         sgd_step_kernel<<<grid, state->block_size, 0, state->stream>>>(state->d_params, state->d_grads, lr, state->len);
         err = cudaGetLastError();
         if (err != cudaSuccess) {
-            cudaFree(d_grads);
             return -((int)err);
         }
 
         if (copy_back && params_ptr) {
             err = cudaMemcpyAsync(params_ptr, state->d_params, state->len * sizeof(float), cudaMemcpyDeviceToHost, state->stream);
             if (err != cudaSuccess) {
-                cudaFree(d_grads);
                 return -((int)err);
             }
         }
 
         err = cudaStreamSynchronize(state->stream);
-        cudaFree(d_grads);
         if (err != cudaSuccess) {
             return -((int)err);
         }

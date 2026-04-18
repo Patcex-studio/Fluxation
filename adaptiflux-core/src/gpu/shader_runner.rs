@@ -37,7 +37,7 @@ impl ShaderRunner {
         entry_point: &str,
         bind_group_layout: BindGroupLayout,
         bind_group: BindGroup,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Compute Shader"),
             source: ShaderSource::Wgsl(shader_code.into()),
@@ -66,7 +66,7 @@ impl ShaderRunner {
         })
     }
 
-    pub async fn run(&self, x: u32, y: u32, z: u32) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self, x: u32, y: u32, z: u32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
