@@ -21,6 +21,7 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use crate::agent::blueprint::base::AgentBlueprint;
+use crate::agent::synapse_manager::{SynapseManager, SynapseConfig, NormMode};
 use crate::agent::state::{AgentUpdateResult, RoleType};
 use crate::core::message_bus::message::Message;
 use crate::core::topology::{TopologyChange, ZoooidTopology};
@@ -79,12 +80,11 @@ fn default_pruning_threshold() -> f32 {
 #[derive(Debug, Clone)]
 pub struct CognitivezooidState {
     pub izh_state: IzhikevichState,
-    pub izh_params: IzhikevichParams, // Add params to state for learning
+    pub izh_params: IzhikevichParams,
     pub tick_count: u64,
-    pub spike_count: u64, // Add spike counter
-    pub last_pre_spike_times: HashMap<ZoooidId, u64>, // For STDP
-    pub incoming_senders: Vec<ZoooidId>, // For indexing weights
-    pub synaptic_weights: Vec<f32>, // Synaptic weights for STDP
+    pub spike_count: u64,
+    pub last_pre_spike_times: HashMap<ZoooidId, u64>, // For STDP timing
+    pub synapse_manager: SynapseManager, // Centralized synapse management (replaces Vec<ZoooidId> + Vec<f32>)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,14 +100,23 @@ impl AgentBlueprint for CognitivezooidBlueprint {
         let izh_state = <IzhikevichNeuron as crate::primitives::base::Primitive>::initialize(
             self.params.izh_params.clone(),
         );
+
+        // Configure SynapseManager with sensible defaults for Cognitive agents
+        let synapse_config = SynapseConfig {
+            norm_mode: NormMode::L1, // L1 normalization for stable STDP
+            max_connections: 50,
+            min_weight: 0.0,
+            max_weight: 1.0,
+            default_weight: 0.1,
+        };
+
         Ok(Box::new(CognitivezooidState {
             izh_state,
-            izh_params: self.params.izh_params.clone(), // Store params in state
+            izh_params: self.params.izh_params.clone(),
             tick_count: 0,
             spike_count: 0,
             last_pre_spike_times: HashMap::new(),
-            incoming_senders: Vec::new(),
-            synaptic_weights: Vec::new(),
+            synapse_manager: SynapseManager::new(synapse_config),
         }))
     }
 
@@ -124,17 +133,16 @@ impl AgentBlueprint for CognitivezooidBlueprint {
 
         state.tick_count += 1;
 
-        // Update last pre-spike times for incoming spikes
+        // Phase 1: Process incoming spikes and update synapse manager
         for (sender, msg) in &inputs {
             if let Message::SpikeEvent { .. } = msg {
                 state.last_pre_spike_times.insert(*sender, state.tick_count);
-                if !state.incoming_senders.contains(sender) {
-                    state.incoming_senders.push(*sender);
-                    state.synaptic_weights.push(0.1);
-                }
+                // Automatically add synapse via manager (O(1) if already exists)
+                let _ = state.synapse_manager.add_synapse(*sender, 0.1);
             }
         }
 
+        // Phase 2: Prepare inputs for Izhikevich neuron
         let primitive_inputs: Vec<PrimitiveMessage> = inputs
             .into_iter()
             .filter_map(|(_sender, msg)| match msg {
@@ -143,10 +151,11 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             })
             .collect();
 
+        // Phase 3: Update Izhikevich neuron state
         let (new_izh_state, primitive_outputs) =
             <IzhikevichNeuron as crate::primitives::base::Primitive>::update(
                 state.izh_state.clone(),
-                &state.izh_params, // Use params from state
+                &state.izh_params,
                 &primitive_inputs,
             );
 
@@ -154,31 +163,44 @@ impl AgentBlueprint for CognitivezooidBlueprint {
 
         // Count spikes
         let has_spiked = primitive_outputs.iter().any(|prim_msg| matches!(prim_msg, PrimitiveMessage::Spike { .. }));
-        for prim_msg in &primitive_outputs {
-            if let PrimitiveMessage::Spike { .. } = prim_msg {
-                state.spike_count += 1;
-            }
+        if has_spiked {
+            state.spike_count += 1;
         }
 
-        // Apply STDP if spiked
+        // Phase 4: Apply STDP learning rule if post-synaptic spike occurred
         if has_spiked {
-            for (i, &sender) in state.incoming_senders.iter().enumerate() {
+            for sender in state.synapse_manager.get_sources() {
                 if let Some(&pre_time) = state.last_pre_spike_times.get(&sender) {
                     let delta_t = (state.tick_count as f32) - (pre_time as f32);
+                    // STDP: Δw ∝ exp(-|Δt| / τ)
                     let dw = if delta_t > 0.0 {
+                        // Pre-before-post: potentiation (Δt > 0)
                         self.params.stdp_a_plus * (-delta_t / self.params.stdp_tau_plus).exp()
                     } else {
+                        // Post-before-pre: depression (Δt < 0)
                         -self.params.stdp_a_minus * (delta_t.abs() / self.params.stdp_tau_minus).exp()
                     };
-                    state.synaptic_weights[i] += dw;
-                    state.synaptic_weights[i] *= 1.0 - self.params.weight_decay;
-                    if state.synaptic_weights[i].abs() < self.params.pruning_threshold {
-                        state.synaptic_weights[i] = 0.0;
+
+                    // Apply weight decay and update
+                    let decay_factor = 1.0 - self.params.weight_decay;
+                    let actual_delta = dw * decay_factor;
+
+                    let _ = state.synapse_manager.update_weight(sender, actual_delta, state.tick_count);
+
+                    // Prune weak synapses
+                    if let Some(weight) = state.synapse_manager.get_weight(sender) {
+                        if weight.abs() < self.params.pruning_threshold {
+                            let _ = state.synapse_manager.remove_synapse(sender);
+                        }
                     }
                 }
             }
+
+            // Apply normalization to ensure stable weight ranges
+            state.synapse_manager.normalize();
         }
 
+        // Phase 5: Generate output spikes
         let output_messages = primitive_outputs
             .into_iter()
             .filter_map(|prim_msg| match prim_msg {
@@ -193,6 +215,7 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             })
             .collect();
 
+        // Phase 6: Periodic topology requests
         let topology_change = if state.tick_count % self.params.connection_request_interval == 0 {
             let all_nodes: Vec<_> = topology.graph.nodes().collect();
             if !all_nodes.is_empty() {

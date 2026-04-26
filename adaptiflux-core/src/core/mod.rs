@@ -19,10 +19,12 @@ pub mod message_bus;
 pub mod resource_manager;
 pub mod scheduler;
 pub mod topology;
+pub mod topology_events;
 pub mod zoooid_handle;
 
 pub use message_bus::{LocalBus, Message, MessageBus, RecvError, SendError};
 pub use resource_manager::{ResourceAllocation, ResourceInfo, ResourceManager};
 pub use scheduler::{CoreScheduler, HierarchyHook, MemoryAttentionHook, OnlineAdaptationHook};
 pub use topology::{ConnectionProperties, SystemMetrics, TopologyChange, ZoooidTopology};
+pub use topology_events::{TopologyEvent, TopologyEventBus};
 pub use zoooid_handle::{SchedulerMetrics, ZoooidHandle};

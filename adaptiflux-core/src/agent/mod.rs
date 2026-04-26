@@ -17,8 +17,10 @@
 
 pub mod blueprint;
 pub mod state;
+pub mod synapse_manager;
 pub mod zoooid;
 
 pub use blueprint::AgentBlueprint;
 pub use state::{AgentUpdateResult, RoleType};
+pub use synapse_manager::{SynapseManager, SynapseConfig, SynapseEntry, NormMode};
 pub use zoooid::Zoooid;

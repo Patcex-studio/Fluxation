@@ -18,6 +18,8 @@
 use petgraph::graphmap::DiGraphMap;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tracing::debug;
 
 use crate::utils::types::{StateValue, ZoooidId};
 
@@ -43,13 +45,30 @@ impl Default for ConnectionProperties {
 #[derive(Debug, Clone)]
 pub struct ZoooidTopology {
     pub graph: DiGraphMap<ZoooidId, ConnectionProperties>,
+    /// Optional event bus for topology changes (for synapse synchronization)
+    /// If Some, events are published when edges change; if None, no events (backward compat)
+    pub event_bus: Option<Arc<crate::core::TopologyEventBus>>,
 }
 
 impl ZoooidTopology {
     pub fn new() -> Self {
         Self {
             graph: DiGraphMap::new(),
+            event_bus: None,
         }
+    }
+
+    /// Creates a new topology with event bus for synapse synchronization.
+    pub fn with_event_bus(event_bus: Arc<crate::core::TopologyEventBus>) -> Self {
+        Self {
+            graph: DiGraphMap::new(),
+            event_bus: Some(event_bus),
+        }
+    }
+
+    /// Sets the event bus for topology change notifications.
+    pub fn set_event_bus(&mut self, event_bus: Arc<crate::core::TopologyEventBus>) {
+        self.event_bus = Some(event_bus);
     }
 
     /// Try to add an edge; respects MAX_DEGREE_PER_AGENT constraint.
@@ -83,18 +102,52 @@ impl ZoooidTopology {
             return false;
         }
 
-        self.graph.add_edge(from, to, props);
+        self.graph.add_edge(from, to, props.clone());
+
+        // Publish event if event bus is available
+        if let Some(bus) = &self.event_bus {
+            let event = crate::core::TopologyEvent::EdgeAdded {
+                from,
+                to,
+                initial_weight: props.weight,
+            };
+            let _ = bus.publish(event);
+        }
+
         true
     }
 
     /// Legacy method for backward compatibility: adds edge without degree check.
     /// Use try_add_edge() for plasticity rules to respect topology limits.
     pub fn add_edge(&mut self, from: ZoooidId, to: ZoooidId, props: ConnectionProperties) {
-        self.graph.add_edge(from, to, props);
+        self.graph.add_edge(from, to, props.clone());
+
+        // Publish event if event bus is available
+        if let Some(bus) = &self.event_bus {
+            let event = crate::core::TopologyEvent::EdgeAdded {
+                from,
+                to,
+                initial_weight: props.weight,
+            };
+            let _ = bus.publish(event);
+        }
     }
 
-    pub fn remove_edge(&mut self, from: ZoooidId, to: ZoooidId) {
-        self.graph.remove_edge(from, to);
+    /// Removes an edge and publishes event if event bus is configured.
+    /// Returns the removed edge properties if it existed.
+    pub fn remove_edge(&mut self, from: ZoooidId, to: ZoooidId) -> Option<ConnectionProperties> {
+        let removed = self.graph.remove_edge(from, to);
+
+        // Publish event if event bus is available and edge was removed
+        if removed.is_some() {
+            if let Some(bus) = &self.event_bus {
+                let event = crate::core::TopologyEvent::EdgeRemoved { from, to };
+                let _ = bus.publish(event);
+                debug!("Published EdgeRemoved event: {} -> {}", from, to);
+            }
+        }
+
+        removed
     }
 
     pub fn get_neighbors(&self, id: ZoooidId) -> Vec<ZoooidId> {

@@ -22,7 +22,7 @@ tracing-appender = "0.2"
 crossterm = { version = "0.27", optional = true }
 rayon = "1.7"
 petgraph = "0.7"
-uuid = { version = "1.4", features = ["v4"] }
+uuid = { version = "1.4", features = ["v4", "v5", "serde"] }
 thiserror = "1.0"
 num_cpus = "1.17"
 wgpu = { version = "0.20.1", optional = true, features = ["metal", "dx12", "vulkan-portability", "glsl"] }
@@ -62,5 +62,9 @@ harness = false
 
 [[bench]]
 name = "scheduler_bench"
+harness = false
+
+[[bench]]
+name = "synapse_lookup_bench"
 harness = false
 
