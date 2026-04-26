@@ -31,7 +31,7 @@ Fluxation reimagines AI as a decentralized, event-driven network of heterogeneou
 ![2b2d82f3-f839-400f-bac4-d4b07e1b23f8](https://github.com/user-attachments/assets/1582403a-389e-441d-abaa-01115be263da)
 
 ---
-![Status](https://img.shields.io/badge/Status-Alpha-red.svg?style=for-the-badge&logo=github) ![Version](https://img.shields.io/badge/Version-1.0.2--alpha-yellow.svg?style=for-the-badge&logo=github) ![Stage](https://img.shields.io/badge/Stage-Experimental-red.svg?style=for-the-badge) ![Patcex Studio](https://img.shields.io/badge/Patcex_Studio-Patching_Reality-pink?style=for-the-badge&logo=heart)
+![Status](https://img.shields.io/badge/Status-Alpha-red.svg?style=for-the-badge&logo=github) ![Version](https://img.shields.io/badge/Version-v1.0.3--orphan--slurp-yellow.svg?style=for-the-badge&logo=github) ![Stage](https://img.shields.io/badge/Stage-Experimental-red.svg?style=for-the-badge) ![Patcex Studio](https://img.shields.io/badge/Patcex_Studio-Patching_Reality-pink?style=for-the-badge&logo=heart)
 
 ---
 
