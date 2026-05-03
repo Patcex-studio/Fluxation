@@ -18,7 +18,6 @@
 use adaptiflux_core::*;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::info;
 
 #[tokio::main]
@@ -28,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let message_bus = Arc::new(LocalBus::new());
-    let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(tokio::sync::RwLock::new(ZoooidTopology::new()));
     let rule_engine = RuleEngine::new();
     let resource_manager = ResourceManager::new();
 

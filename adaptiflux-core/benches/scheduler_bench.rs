@@ -37,7 +37,7 @@ impl AgentBlueprint for BenchAgent {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(adaptiflux_core::ZoooidId, Message)>,
         _topology: &adaptiflux_core::ZoooidTopology,
         _memory: Option<&adaptiflux_core::MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -47,7 +47,7 @@ impl AgentBlueprint for BenchAgent {
 
         let output_messages = inputs
             .into_iter()
-            .map(|msg| match msg {
+            .map(|(_sender, msg)| match msg {
                 Message::Text(text) => Message::Text(format!("echo: {}", text)),
                 other => other,
             })
@@ -67,7 +67,7 @@ struct BenchState {
 }
 
 async fn setup_scheduler(num_agents: usize) -> CoreScheduler {
-    let topology = std::sync::Arc::new(tokio::sync::Mutex::new(
+    let topology = std::sync::Arc::new(tokio::sync::RwLock::new(
         adaptiflux_core::ZoooidTopology::new(),
     ));
     let message_bus = std::sync::Arc::new(LocalBus::new());

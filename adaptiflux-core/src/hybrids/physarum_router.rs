@@ -228,7 +228,7 @@ mod tests {
     use crate::core::{LocalBus, ResourceManager, ZoooidTopology};
     use crate::RuleEngine;
     use std::sync::Arc;
-    use tokio::sync::{Mutex, RwLock};
+    use tokio::sync::RwLock;
 
     #[tokio::test]
     async fn test_physarum_router_creation() {

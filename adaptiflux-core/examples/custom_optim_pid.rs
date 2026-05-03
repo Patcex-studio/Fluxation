@@ -25,6 +25,7 @@ use adaptiflux_core::agent::state::{AgentUpdateResult, RoleType};
 use adaptiflux_core::core::message_bus::message::Message;
 use adaptiflux_core::core::topology::ZoooidTopology;
 use adaptiflux_core::memory::types::MemoryPayload;
+use adaptiflux_core::ZoooidId;
 use async_trait::async_trait;
 use std::any::Any;
 
@@ -48,15 +49,15 @@ impl AgentBlueprint for PlantBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(ZoooidId, Message)>,
         _topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
         let pos = state.downcast_mut::<f32>().ok_or("plant state")?;
         let u: f32 = inputs
             .iter()
-            .filter_map(|m| match m {
-                Message::ControlSignal(x) => Some(*x),
+            .filter_map(|(_sender, m)| match m {
+                Message::ControlSignal(x) => Some(x),
                 _ => None,
             })
             .sum();

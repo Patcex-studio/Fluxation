@@ -27,7 +27,7 @@ use crate::core::message_bus::message::Message;
 use crate::core::topology::{TopologyChange, ZoooidTopology};
 use crate::memory::types::MemoryPayload;
 use crate::primitives::base::PrimitiveMessage;
-use crate::primitives::spiking::{IzhikevichBatch, IzhikevichBatchParams};
+use crate::primitives::spiking::{IzhikevichBatch, IzhikevichBatchParams, pack_input_currents};
 use crate::primitives::spiking::izhikevich::{IzhikevichNeuron, IzhikevichParams, IzhikevichState};
 use crate::utils::types::{StateValue, ZoooidId};
 
@@ -48,16 +48,16 @@ pub struct CognitivezooidParams {
     pub weight_decay: f32,
     #[serde(default = "default_pruning_threshold")]
     pub pruning_threshold: f32,
-    #[serde(default = "default_enable_simd_batch")]
-    pub enable_simd_batch: bool,
+    #[serde(default = "default_neuron_count")]
+    pub neuron_count: usize,
 }
 
 fn default_connection_request_interval() -> u64 {
     10
 }
 
-fn default_enable_simd_batch() -> bool {
-    false
+fn default_neuron_count() -> usize {
+    1
 }
 
 impl Default for CognitivezooidParams {
@@ -71,7 +71,7 @@ impl Default for CognitivezooidParams {
             stdp_tau_minus: default_stdp_tau_minus(),
             weight_decay: default_weight_decay(),
             pruning_threshold: default_pruning_threshold(),
-            enable_simd_batch: default_enable_simd_batch(),
+            neuron_count: default_neuron_count(),
         }
     }
 }
@@ -108,6 +108,7 @@ pub struct CognitivezooidState {
     pub spike_count: u64,
     pub last_pre_spike_times: HashMap<ZoooidId, u64>, // For STDP timing
     pub synapse_manager: SynapseManager, // Centralized synapse management (replaces Vec<ZoooidId> + Vec<f32>)
+    pub neuron_count: usize,
     /// ⚡ SIMD batch mode for future multi-neuron agents (PERF-003)
     /// When Some: processes N neurons in groups of 4 (3-4x speedup)
     /// When None: uses scalar Izhikevich neuron (single neuron)
@@ -137,6 +138,9 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             default_weight: 0.1,
         };
 
+        let neuron_count = self.params.neuron_count.max(1);
+        let use_simd = neuron_count >= 4;
+
         Ok(Box::new(CognitivezooidState {
             izh_state,
             izh_params: self.params.izh_params.clone(),
@@ -144,14 +148,18 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             spike_count: 0,
             last_pre_spike_times: HashMap::new(),
             synapse_manager: SynapseManager::new(synapse_config),
-            simd_batch: if self.params.enable_simd_batch {
-                Some(IzhikevichBatch::new(1, &IzhikevichBatchParams::from_scalar(
-                    self.params.izh_params.a,
-                    self.params.izh_params.b,
-                    self.params.izh_params.c,
-                    self.params.izh_params.d,
-                    self.params.izh_params.dt,
-                )))
+            neuron_count,
+            simd_batch: if use_simd {
+                Some(IzhikevichBatch::new(
+                    neuron_count,
+                    &IzhikevichBatchParams::from_scalar(
+                        self.params.izh_params.a,
+                        self.params.izh_params.b,
+                        self.params.izh_params.c,
+                        self.params.izh_params.d,
+                        self.params.izh_params.dt,
+                    ),
+                ))
             } else {
                 None
             },
@@ -191,18 +199,16 @@ impl AgentBlueprint for CognitivezooidBlueprint {
 
         // Phase 3: Update Izhikevich neuron state
         let primitive_outputs = if let Some(batch) = &mut state.simd_batch {
-            let mut currents = [0.0f32; 4];
-            let mut lane = 0;
-            for prim_msg in &primitive_inputs {
-                if let PrimitiveMessage::InputCurrent(value) = prim_msg {
-                    if lane < 4 {
-                        currents[lane] = *value as f32;
-                        lane += 1;
-                    } else {
-                        currents[0] += *value as f32;
-                    }
-                }
-            }
+            debug_assert_eq!(batch.neuron_count, state.neuron_count);
+
+            let input_currents: Vec<StateValue> = primitive_inputs
+                .iter()
+                .filter_map(|msg| match msg {
+                    PrimitiveMessage::InputCurrent(value) => Some(*value),
+                    _ => None,
+                })
+                .collect();
+            let packed_inputs = pack_input_currents(&input_currents);
 
             let params_simd = IzhikevichBatchParams::from_scalar(
                 state.izh_params.a,
@@ -211,12 +217,16 @@ impl AgentBlueprint for CognitivezooidBlueprint {
                 state.izh_params.d,
                 state.izh_params.dt,
             );
-            batch.update(&[wide::f32x4::from(currents)], &params_simd);
+            batch.update(&packed_inputs, &params_simd);
 
             let voltages = batch.get_v();
             let adaptations = batch.get_u();
-            state.izh_state.v = voltages[0] as StateValue;
-            state.izh_state.u = adaptations[0] as StateValue;
+            if !voltages.is_empty() {
+                state.izh_state.v = voltages[0] as StateValue;
+            }
+            if !adaptations.is_empty() {
+                state.izh_state.u = adaptations[0] as StateValue;
+            }
 
             let mut outputs = Vec::new();
             if batch.spike_count() > 0 {
@@ -330,7 +340,7 @@ mod tests {
     async fn cognitivezooid_simd_branch_spikes() {
         let blueprint = CognitivezooidBlueprint {
             params: CognitivezooidParams {
-                enable_simd_batch: true,
+                neuron_count: 4,
                 ..Default::default()
             },
         };

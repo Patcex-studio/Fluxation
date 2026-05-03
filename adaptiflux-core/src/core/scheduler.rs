@@ -25,9 +25,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, info_span, warn};
 
 use crate::agent::zoooid::Zoooid;
 use crate::attention::apply_attention_to_hits;
@@ -182,6 +183,22 @@ pub struct CoreScheduler {
     pub hierarchy: Option<HierarchyHook>,
     /// Optional hook for memory attention and retrieval integration
     pub memory_attention: Option<MemoryAttentionHook>,
+}
+
+struct PendingAgentUpdate {
+    agent_id: ZoooidId,
+    handle: ZoooidHandle,
+    inputs: Vec<(ZoooidId, Message)>,
+    memory_inputs_snapshot: Vec<(ZoooidId, Message)>,
+    mem_for_update: Option<MemoryPayload>,
+}
+
+struct AgentUpdateOutcome {
+    handle: ZoooidHandle,
+    result: Result<AgentUpdateResult, String>,
+    agent_id: ZoooidId,
+    memory_inputs_snapshot: Vec<(ZoooidId, Message)>,
+    inputs: Vec<(ZoooidId, Message)>,
 }
 
 impl CoreScheduler {
@@ -472,6 +489,67 @@ impl CoreScheduler {
         }
     }
 
+    async fn update_agents_parallel(
+        &self,
+        pending_updates: Vec<PendingAgentUpdate>,
+        topology_snapshot: ZoooidTopology,
+        config: AsyncOptimizationConfig,
+    ) -> Vec<AgentUpdateOutcome> {
+        let semaphore = Arc::new(Semaphore::new(config.max_concurrent_updates));
+        let mut join_set = JoinSet::new();
+
+        for pending in pending_updates {
+            let topology_snapshot = topology_snapshot.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            join_set.spawn(async move {
+                let _permit = permit;
+                let PendingAgentUpdate {
+                    agent_id,
+                    mut handle,
+                    inputs,
+                    memory_inputs_snapshot,
+                    mem_for_update,
+                } = pending;
+
+                let inputs_for_update = inputs.clone();
+                let result = match handle
+                    .blueprint
+                    .update(
+                        &mut handle.state,
+                        inputs_for_update.clone(),
+                        &topology_snapshot,
+                        mem_for_update.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(res) => Ok(res),
+                    Err(e) => Err(e.to_string()),
+                };
+
+                AgentUpdateOutcome {
+                    handle,
+                    result,
+                    agent_id,
+                    memory_inputs_snapshot,
+                    inputs,
+                }
+            });
+        }
+
+        let mut results = Vec::new();
+        results.reserve(join_set.len());
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(outcome) => results.push(outcome),
+                Err(err) => {
+                    error!("Agent task panicked: {}", err);
+                }
+            }
+        }
+
+        results
+    }
+
     async fn apply_topology_effects_bundle(
         &mut self,
         mut effects: AppliedTopologyEffects,
@@ -493,15 +571,18 @@ impl CoreScheduler {
     }
 
     async fn iteration_step(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _iteration_span = info_span!("iteration_step", iteration = self.plasticity_state.global_iteration).entered();
         let iter_start = Instant::now();
         let iteration = self.plasticity_state.global_iteration;
 
+        let _metrics_span = info_span!("metrics").entered();
         let metrics_phase_start = Instant::now();
         // Phase 1: Metrics (before rules)
         let metrics = {
             let topology_guard = self.topology.read().await;
             SystemMetrics::from_topology(&topology_guard)
         };
+        drop(_metrics_span);
         let metrics_phase_duration_ms = metrics_phase_start.elapsed().as_secs_f64() * 1000.0;
 
         debug!(
@@ -511,6 +592,7 @@ impl CoreScheduler {
 
         let mut topology_changes = 0usize;
         let topology_rules_phase_start = Instant::now();
+        let _topology_rules_span = info_span!("topology_rules").entered();
 
         // Phase 2a: Classical topology rules → apply → lifecycle
         match self
@@ -537,6 +619,7 @@ impl CoreScheduler {
             }
             Err(e) => error!("Topology rule execution failed: {}", e),
         }
+        drop(_topology_rules_span);
         let topology_rules_phase_duration_ms =
             topology_rules_phase_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -551,6 +634,7 @@ impl CoreScheduler {
         };
 
         let plasticity_rules_phase_start = Instant::now();
+        let _plasticity_rules_span = info_span!("plasticity_rules").entered();
         match self
             .rule_engine
             .run_plasticity_rules(&self.topology, &metrics_plasticity, &plasticity_ctx)
@@ -575,6 +659,7 @@ impl CoreScheduler {
             }
             Err(e) => error!("Plasticity rule execution failed: {}", e),
         }
+        drop(_plasticity_rules_span);
         let plasticity_rules_phase_duration_ms =
             plasticity_rules_phase_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -587,22 +672,6 @@ impl CoreScheduler {
         sorted_ids.sort();
 
         let mut memory_hints: HashMap<ZoooidId, crate::utils::types::StateValue> = HashMap::new();
-
-        struct PendingAgentUpdate {
-            agent_id: ZoooidId,
-            handle: ZoooidHandle,
-            inputs: Vec<(ZoooidId, Message)>,
-            memory_inputs_snapshot: Vec<(ZoooidId, Message)>,
-            mem_for_update: Option<MemoryPayload>,
-        }
-
-        struct AgentUpdateOutcome {
-            handle: ZoooidHandle,
-            result: Result<AgentUpdateResult, String>,
-            agent_id: ZoooidId,
-            memory_inputs_snapshot: Vec<(ZoooidId, Message)>,
-            inputs: Vec<(ZoooidId, Message)>,
-        }
 
         let mut pending_updates = Vec::new();
         for agent_id in sorted_ids {
@@ -693,62 +762,11 @@ impl CoreScheduler {
             .unwrap_or_else(|| AsyncOptimizationConfig::new(num_cpus::get()));
 
         let update_phase_start = std::time::Instant::now();
-        let tasks: Vec<_> = pending_updates
-            .into_iter()
-            .map(|pending| {
-                let topology_snapshot = topology_snapshot.clone();
-                async move {
-                    let PendingAgentUpdate {
-                        agent_id,
-                        mut handle,
-                        inputs,
-                        memory_inputs_snapshot,
-                        mem_for_update,
-                    } = pending;
-
-                    let inputs_for_update = inputs.clone();
-                    let update_start = Instant::now();
-                    let result = match handle
-                        .blueprint
-                        .update(
-                            &mut handle.state,
-                            inputs_for_update.clone(),
-                            &topology_snapshot,
-                            mem_for_update.as_ref(),
-                        )
-                        .await
-                    {
-                        Ok(res) => Ok(res),
-                        Err(e) => Err(e.to_string()),
-                    };
-                    let update_duration_ms = update_start.elapsed().as_secs_f64() * 1000.0;
-                    if iteration.is_multiple_of(100) {
-                        let output_count = result
-                            .as_ref()
-                            .map(|r| r.output_messages.len())
-                            .unwrap_or(0);
-                        trace!(
-                            agent_id = ?agent_id,
-                            iteration,
-                            duration_ms = update_duration_ms,
-                            input_count = inputs_for_update.len(),
-                            output_count,
-                            "Agent update duration"
-                        );
-                    }
-
-                    AgentUpdateOutcome {
-                        handle,
-                        result,
-                        agent_id,
-                        memory_inputs_snapshot,
-                        inputs,
-                    }
-                }
-            })
-            .collect();
-
-        let outcomes = config.run_batched(tasks).await;
+        let _update_agents_span = info_span!("update_agents").entered();
+        let outcomes = self
+            .update_agents_parallel(pending_updates, topology_snapshot, config)
+            .await;
+        drop(_update_agents_span);
         let update_phase_duration_ms = update_phase_start.elapsed().as_secs_f64() * 1000.0;
         debug!(
             "Iteration {} agent update phase duration: {:.2}ms",

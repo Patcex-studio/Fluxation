@@ -29,8 +29,6 @@ use adaptiflux_core::{
 use async_trait::async_trait;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, BatchSize, Criterion};
 use std::any::Any;
-use std::sync::Arc;
-use std::time::Instant;
 use tokio::runtime::Runtime;
 
 /// Simple cognitive agent for benchmarking
@@ -162,6 +160,26 @@ fn bench_topology_read_contention(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark PERF-001: End-to-end parallel scheduler with 239 agents
+fn bench_scheduler_parallel_239_agents(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("perf_001_scheduler_parallel_239_agents");
+    group.sample_size(10);
+    group.bench_function("239_agents", |b| {
+        b.iter_batched(
+            || rt.block_on(setup_connected_scheduler(239, 0.1)),
+            |mut scheduler| {
+                rt.block_on(async {
+                    scheduler.run_one_iteration().await.unwrap();
+                });
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 /// Benchmark PERF-002: Metrics cache effectiveness
 /// Measures topology metrics calculation with cached values versus fresh recompute
 fn bench_metrics_cache_efficiency(c: &mut Criterion) {
@@ -172,7 +190,7 @@ fn bench_metrics_cache_efficiency(c: &mut Criterion) {
 
     for num_agents in [50, 100, 239].iter() {
         // Prepare scheduler and warm cache once for clean-cache measurement
-        let mut scheduler = rt.block_on(setup_connected_scheduler(*num_agents, 0.05));
+        let scheduler = rt.block_on(setup_connected_scheduler(*num_agents, 0.05));
         let topology = rt.block_on(scheduler.topology.read());
         let _ = adaptiflux_core::SystemMetrics::from_topology(&topology);
         drop(topology);
@@ -213,10 +231,12 @@ fn bench_metrics_cache_efficiency(c: &mut Criterion) {
 /// Benchmark PERF-003: SIMD neuron batch processing
 /// Measures performance of batched Izhikevich updates with f32x4 vectors
 fn bench_simd_neuron_performance(c: &mut Criterion) {
-    use adaptiflux_core::primitives::spiking::izhikevich::simd::{IzhikevichBatch, pack_input_currents};
+    use adaptiflux_core::primitives::spiking::izhikevich::simd::{IzhikevichBatch, IzhikevichBatchParams, pack_input_currents};
 
     let mut group = c.benchmark_group("perf_003_simd_neurons");
     group.sample_size(20);
+
+    let batch_params = IzhikevichBatchParams::from_scalar(0.02, 0.2, -65.0, 8.0, 0.1);
 
     for neuron_count in [4, 8, 16, 32].iter() {
         group.bench_with_input(
@@ -225,13 +245,13 @@ fn bench_simd_neuron_performance(c: &mut Criterion) {
             |b, &neuron_count| {
                 b.iter_batched(
                     || {
-                        let batch = IzhikevichBatch::new(neuron_count, 0.02, 0.2, -65.0, 8.0);
+                        let batch = IzhikevichBatch::new(neuron_count, &batch_params);
                         let inputs = pack_input_currents(&vec![10.0; neuron_count]);
                         (batch, inputs)
                     },
                     |(mut batch, inputs)| {
                         for _ in 0..100 {
-                            batch.update(&inputs, 0.1);
+                            batch.update(&inputs, &batch_params);
                         }
                         black_box(batch)
                     },
@@ -240,6 +260,49 @@ fn bench_simd_neuron_performance(c: &mut Criterion) {
             },
         );
     }
+    group.finish();
+}
+
+/// Benchmark PERF-003: SIMD batch vs scalar for 32 neurons
+fn bench_simd_batch_vs_scalar(c: &mut Criterion) {
+    use adaptiflux_core::primitives::spiking::IzhikevichNeuron;
+    use adaptiflux_core::primitives::spiking::izhikevich::IzhikevichParams;
+    use adaptiflux_core::primitives::base::{Primitive, PrimitiveMessage};
+    use adaptiflux_core::primitives::spiking::{IzhikevichBatch, IzhikevichBatchParams, pack_input_currents};
+
+    let mut group = c.benchmark_group("perf_003_simd_batch_vs_scalar");
+    group.sample_size(20);
+    let neuron_count = 32;
+    let params = IzhikevichParams::default();
+    let scalar_inputs: Vec<_> = (0..neuron_count)
+        .map(|_| PrimitiveMessage::InputCurrent(10.0))
+        .collect();
+    let simd_packed = pack_input_currents(&vec![10.0; neuron_count]);
+    let batch_params = IzhikevichBatchParams::from_scalar(
+        params.a,
+        params.b,
+        params.c,
+        params.d,
+        params.dt,
+    );
+
+    group.bench_function("scalar_32", |b| {
+        b.iter(|| {
+            let mut state = IzhikevichNeuron::initialize(params.clone());
+            let (_state, outputs) = IzhikevichNeuron::update(state, &params, &scalar_inputs);
+            black_box(outputs);
+        })
+    });
+
+    group.bench_function("simd_32", |b| {
+        b.iter(|| {
+            let mut batch = IzhikevichBatch::new(neuron_count, &batch_params);
+            for _ in 0..10 {
+                batch.update(&simd_packed, &batch_params);
+            }
+            black_box(batch);
+        })
+    });
     group.finish();
 }
 
@@ -276,8 +339,10 @@ fn bench_scheduler_end_to_end(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_topology_read_contention,
+    bench_scheduler_parallel_239_agents,
     bench_metrics_cache_efficiency,
     bench_simd_neuron_performance,
+    bench_simd_batch_vs_scalar,
     bench_scheduler_end_to_end
 );
 criterion_main!(benches);

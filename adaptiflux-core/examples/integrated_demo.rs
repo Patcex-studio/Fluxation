@@ -33,7 +33,7 @@ use adaptiflux_core::{
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::time::Duration;
 
 /// Echo blueprint - reflects received messages back to sender
@@ -53,7 +53,7 @@ impl AgentBlueprint for EchoBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(adaptiflux_core::ZoooidId, Message)>,
         topology: &adaptiflux_core::ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -64,7 +64,7 @@ impl AgentBlueprint for EchoBlueprint {
 
         let response = inputs
             .into_iter()
-            .map(|message| match message {
+            .map(|(_sender, message)| match message {
                 Message::Text(text) => Message::Text(format!("echo: {}", text)),
                 other => other,
             })
@@ -125,7 +125,7 @@ impl AgentBlueprint for SensorBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        _inputs: Vec<Message>,
+        _inputs: Vec<(adaptiflux_core::ZoooidId, Message)>,
         topology: &adaptiflux_core::ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -198,7 +198,7 @@ impl AgentBlueprint for ProcessorBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(adaptiflux_core::ZoooidId, Message)>,
         topology: &adaptiflux_core::ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -206,7 +206,7 @@ impl AgentBlueprint for ProcessorBlueprint {
             proc_state.tick_count += 1;
             let mut responses = Vec::new();
 
-            for input in inputs {
+            for (_sender, input) in inputs {
                 if let Message::Text(text) = input {
                     proc_state.processed += 1;
                     proc_state.last_message = Some(text.clone());
@@ -270,7 +270,7 @@ impl AgentBlueprint for AggregatorBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(adaptiflux_core::ZoooidId, Message)>,
         topology: &adaptiflux_core::ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -338,7 +338,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╚════════════════════════════════════════════════════════════╝\n");
 
     // Create core components
-    let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
     let message_bus = Arc::new(LocalBus::new());
     let rule_engine = RuleEngine::new();
     let resource_manager = ResourceManager::new();
@@ -415,7 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_print = std::time::Instant::now();
             loop {
                 if last_print.elapsed() > Duration::from_secs(2) {
-                    let topo = topology_clone.lock().await;
+                    let topo = topology_clone.read().await;
                     println!(
                         "⏱️  System alive - Topology nodes: {}, Connections: {}",
                         topo.graph.node_count(),

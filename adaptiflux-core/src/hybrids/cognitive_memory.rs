@@ -99,7 +99,7 @@ impl CognitiveMemoryArchitecture {
                     stdp_tau_minus: 20.0,
                     weight_decay: 0.0001,
                     pruning_threshold: 0.001,
-                    enable_simd_batch: false,
+                    neuron_count: 1,
                 },
             };
 
@@ -214,7 +214,7 @@ mod tests {
     use crate::core::{LocalBus, ResourceManager, ZoooidTopology};
     use crate::RuleEngine;
     use std::sync::Arc;
-    use tokio::sync::{Mutex, RwLock};
+    use tokio::sync::RwLock;
 
     #[tokio::test]
     async fn test_cognitive_memory_creation() {

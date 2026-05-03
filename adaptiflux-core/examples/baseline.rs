@@ -35,7 +35,7 @@ use uuid::Uuid;
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::time::{interval, Duration, Instant};
 use tracing::{debug, info};
 
@@ -87,7 +87,7 @@ impl AgentBlueprint for StaticNetworkNodeBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(adaptiflux_core::ZoooidId, Message)>,
         _topology: &adaptiflux_core::ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -95,7 +95,7 @@ impl AgentBlueprint for StaticNetworkNodeBlueprint {
             let mut output_messages = Vec::new();
 
             // Process packet messages
-            for input in inputs {
+            for (_sender, input) in inputs {
                 match input {
                     Message::Text(text) => {
                         if let Ok(packet) = serde_json::from_str::<Packet>(&text) {
@@ -224,7 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn create_baseline_scheduler(
     num_nodes: usize,
 ) -> Result<CoreScheduler, Box<dyn std::error::Error + Send + Sync>> {
-    let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
     let mut rule_engine = RuleEngine::new();
     rule_engine.add_consistency_check(Box::new(ConnectedTopologyCheck));
     rule_engine.add_consistency_check(Box::new(MinConnectivityCheck::new(1.0)));

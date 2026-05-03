@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let test_labels: Vec<u8> = tst_lbl;
 
     // Create scheduler
-    let topology = Arc::new(tokio::sync::Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(tokio::sync::RwLock::new(ZoooidTopology::new()));
     let rule_engine = RuleEngine::new();
     let resource_manager = ResourceManager {
         cpu_pool: 4,
@@ -206,6 +206,13 @@ async fn build_mnist_network(
                     dt: 0.1,
                 },
                 connection_request_interval: 10,
+                stdp_a_plus: 0.01,
+                stdp_a_minus: 0.005,
+                stdp_tau_plus: 20.0,
+                stdp_tau_minus: 20.0,
+                weight_decay: 0.0001,
+                pruning_threshold: 0.001,
+                neuron_count: 1,
             },
         };
         let agent = Zoooid::new(id, Box::new(blueprint)).await?;
@@ -225,6 +232,13 @@ async fn build_mnist_network(
                     dt: 0.1,
                 },
                 connection_request_interval: 10,
+                stdp_a_plus: 0.01,
+                stdp_a_minus: 0.005,
+                stdp_tau_plus: 20.0,
+                stdp_tau_minus: 20.0,
+                weight_decay: 0.0001,
+                pruning_threshold: 0.001,
+                neuron_count: 1,
             },
         };
         let agent = Zoooid::new(id, Box::new(blueprint)).await?;
@@ -235,7 +249,7 @@ async fn build_mnist_network(
         for &dst in &hidden_ids {
             scheduler
                 .topology
-                .lock()
+                .write()
                 .await
                 .add_edge(src, dst, Default::default());
         }
@@ -245,7 +259,7 @@ async fn build_mnist_network(
         for &dst in &output_ids {
             scheduler
                 .topology
-                .lock()
+                .write()
                 .await
                 .add_edge(src, dst, Default::default());
         }

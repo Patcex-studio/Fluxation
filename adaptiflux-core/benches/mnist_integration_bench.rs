@@ -39,7 +39,7 @@ fn bench_mnist_integration(c: &mut Criterion) {
     c.bench_function("mnist_network_iteration", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let topology = Arc::new(tokio::sync::Mutex::new(ZoooidTopology::new()));
+                let topology = Arc::new(tokio::sync::RwLock::new(ZoooidTopology::new()));
                 let rule_engine = RuleEngine::new();
                 let resource_manager = ResourceManager {
                     cpu_pool: 4,
@@ -76,6 +76,13 @@ fn bench_mnist_integration(c: &mut Criterion) {
                         adaptiflux_core::agent::blueprint::cognitivezooid::CognitivezooidParams {
                             izh_params: IzhikevichParams::default(),
                             connection_request_interval: 10,
+                            stdp_a_plus: 0.01,
+                            stdp_a_minus: 0.005,
+                            stdp_tau_plus: 20.0,
+                            stdp_tau_minus: 20.0,
+                            weight_decay: 0.0001,
+                            pruning_threshold: 0.001,
+                            neuron_count: 1,
                         };
                     let blueprint = CognitivezooidBlueprint {
                         params: cognitive_params,
@@ -101,7 +108,7 @@ fn bench_mnist_integration(c: &mut Criterion) {
                     for &dst in &hidden_ids {
                         scheduler
                             .topology
-                            .lock()
+                            .write()
                             .await
                             .add_edge(src, dst, Default::default());
                     }
@@ -110,7 +117,7 @@ fn bench_mnist_integration(c: &mut Criterion) {
                     for &dst in &output_ids {
                         scheduler
                             .topology
-                            .lock()
+                            .write()
                             .await
                             .add_edge(src, dst, Default::default());
                     }

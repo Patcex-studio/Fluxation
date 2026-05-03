@@ -24,7 +24,7 @@ use adaptiflux_core::{
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 struct PidAgent;
 
@@ -39,13 +39,13 @@ impl AgentBlueprint for PidAgent {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(ZoooidId, Message)>,
         _topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
         let measurement = inputs
             .iter()
-            .filter_map(|message| match message {
+            .filter_map(|(_sender, message)| match message {
                 Message::ControlSignal(value) => Some(*value),
                 _ => None,
             })
@@ -68,7 +68,7 @@ impl AgentBlueprint for PidAgent {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let message_bus = Arc::new(LocalBus::new());
-    let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
     let rule_engine = RuleEngine::new();
     let resource_manager = ResourceManager::new();
 

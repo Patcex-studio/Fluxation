@@ -23,9 +23,9 @@ use adaptiflux_core::{
     RuleEngine, Zoooid, ZoooidId,
 };
 use async_trait::async_trait;
-use std::any::Any;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
+use std::any::Any;
 
 struct EchoBlueprint;
 
@@ -40,13 +40,13 @@ impl AgentBlueprint for EchoBlueprint {
     async fn update(
         &self,
         _state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(adaptiflux_core::ZoooidId, Message)>,
         _topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
         let response = inputs
             .into_iter()
-            .map(|message| match message {
+            .map(|(_sender, message)| match message {
                 Message::Text(text) => Message::Text(format!("echo: {}", text)),
                 other => other,
             })
@@ -63,7 +63,7 @@ impl AgentBlueprint for EchoBlueprint {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let message_bus = Arc::new(LocalBus::new());
-    let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
     let rule_engine = RuleEngine::new();
     let resource_manager = ResourceManager::new();
 

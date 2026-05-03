@@ -35,4 +35,6 @@
 pub mod izhikevich;
 pub mod lif;
 
-pub use izhikevich::IzhikevichNeuron;pub use izhikevich::simd::{IzhikevichBatch, IzhikevichBatchParams};pub use lif::LifNeuron;
+pub use izhikevich::IzhikevichNeuron;
+pub use izhikevich::simd::{IzhikevichBatch, IzhikevichBatchParams, pack_input_currents};
+pub use lif::LifNeuron;

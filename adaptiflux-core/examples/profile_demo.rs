@@ -32,7 +32,7 @@ use adaptiflux_core::{
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::time::Duration;
 
 /// Search agent that mimics a bee in a swarm searching for nectar
@@ -80,7 +80,7 @@ impl AgentBlueprint for SearchAgentBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(adaptiflux_core::ZoooidId, Message)>,
         topology: &adaptiflux_core::ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -102,7 +102,7 @@ impl AgentBlueprint for SearchAgentBlueprint {
             }
 
             // Process incoming information from neighbors
-            for input in inputs {
+            for (_sender, input) in inputs {
                 match input {
                     Message::Text(text) if text.contains("nectar") => {
                         // Parse nectar information from neighbors
@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("╚════════════════════════════════════════════════════════════╝\n");
 
     // Create core components
-    let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
     let message_bus = Arc::new(LocalBus::new());
     let rule_engine = RuleEngine::new();
     let resource_manager = ResourceManager::new();
@@ -250,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
 
-                let topo = topology_clone.lock().await;
+                let topo = topology_clone.read().await;
                 let node_count = topo.graph.node_count();
                 let edge_count = topo.graph.edge_count();
                 drop(topo);
