@@ -15,6 +15,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0 OR Commercial
 
+mod cached_metrics;
+
+use cached_metrics::CachedMetrics;
 use petgraph::graphmap::DiGraphMap;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
@@ -48,6 +51,8 @@ pub struct ZoooidTopology {
     /// Optional event bus for topology changes (for synapse synchronization)
     /// If Some, events are published when edges change; if None, no events (backward compat)
     pub event_bus: Option<Arc<crate::core::TopologyEventBus>>,
+    /// Metrics cache: invalidated on topology changes
+    pub metrics_cache: CachedMetrics,
 }
 
 impl ZoooidTopology {
@@ -55,6 +60,7 @@ impl ZoooidTopology {
         Self {
             graph: DiGraphMap::new(),
             event_bus: None,
+            metrics_cache: CachedMetrics::new(),
         }
     }
 
@@ -63,6 +69,7 @@ impl ZoooidTopology {
         Self {
             graph: DiGraphMap::new(),
             event_bus: Some(event_bus),
+            metrics_cache: CachedMetrics::new(),
         }
     }
 
@@ -104,6 +111,9 @@ impl ZoooidTopology {
 
         self.graph.add_edge(from, to, props.clone());
 
+        // Invalidate metrics cache on topology change
+        self.metrics_cache.invalidate();
+
         // Publish event if event bus is available
         if let Some(bus) = &self.event_bus {
             let event = crate::core::TopologyEvent::EdgeAdded {
@@ -121,6 +131,9 @@ impl ZoooidTopology {
     /// Use try_add_edge() for plasticity rules to respect topology limits.
     pub fn add_edge(&mut self, from: ZoooidId, to: ZoooidId, props: ConnectionProperties) {
         self.graph.add_edge(from, to, props.clone());
+
+        // Invalidate metrics cache on topology change
+        self.metrics_cache.invalidate();
 
         // Publish event if event bus is available
         if let Some(bus) = &self.event_bus {
@@ -140,6 +153,9 @@ impl ZoooidTopology {
 
         // Publish event if event bus is available and edge was removed
         if removed.is_some() {
+            // Invalidate metrics cache on topology change
+            self.metrics_cache.invalidate();
+
             if let Some(bus) = &self.event_bus {
                 let event = crate::core::TopologyEvent::EdgeRemoved { from, to };
                 let _ = bus.publish(event);
@@ -224,16 +240,20 @@ impl ZoooidTopology {
 
     pub fn add_node(&mut self, id: ZoooidId) {
         self.graph.add_node(id);
+        self.metrics_cache.invalidate();
     }
 
     pub fn remove_node(&mut self, id: ZoooidId) {
         self.graph.remove_node(id);
+        self.metrics_cache.invalidate();
     }
 
     /// Adjust connection weight in place (clamped to a small positive range).
     pub fn adjust_edge_weight(&mut self, from: ZoooidId, to: ZoooidId, delta: StateValue) -> bool {
         if let Some(props) = self.graph.edge_weight_mut(from, to) {
             props.weight = (props.weight + delta).clamp(0.01, 1_000.0);
+            // Note: weight changes don't affect clustering_coefficient or network_diameter,
+            // so we don't invalidate the full cache
             return true;
         }
         false
@@ -290,11 +310,26 @@ impl SystemMetrics {
             0.0
         };
 
-        // Calculate clustering coefficient (simplified version)
-        let clustering_coefficient = Self::calculate_clustering_coefficient(topology);
+        // Use cached metrics if available and cache is clean
+        let (clustering_coefficient, network_diameter, avg_connectivity) = if !topology.metrics_cache.is_dirty() {
+            // Cache is clean - use cached values
+            let cc = topology.metrics_cache.get_clustering_coefficient().unwrap_or(0.0);
+            let nd = topology.metrics_cache.get_network_diameter().unwrap_or(0);
+            let ac = topology.metrics_cache.get_avg_connectivity().unwrap_or(avg_connectivity);
+            (cc, nd, ac)
+        } else {
+            // Cache is dirty - recalculate (O(N²) operation)
+            let cc = Self::calculate_clustering_coefficient(topology);
+            let nd = Self::calculate_network_diameter(topology);
 
-        // Calculate network diameter (simplified - max distance between nodes)
-        let network_diameter = Self::calculate_network_diameter(topology);
+            // Store in cache and mark as clean
+            topology.metrics_cache.set_clustering_coefficient(cc);
+            topology.metrics_cache.set_network_diameter(nd);
+            topology.metrics_cache.set_avg_connectivity(avg_connectivity);
+            topology.metrics_cache.mark_clean();
+
+            (cc, nd, avg_connectivity)
+        };
 
         Self {
             total_zoooids: node_count,

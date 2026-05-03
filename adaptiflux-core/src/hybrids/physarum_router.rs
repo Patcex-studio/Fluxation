@@ -100,7 +100,7 @@ impl PhysarumRouterArchitecture {
         }
 
         // Create a mesh topology (partial connectivity)
-        let mut topology = scheduler.topology.lock().await;
+        let mut topology = scheduler.topology.write().await;
         for i in 0..router_ids.len() {
             // Connect each router to 2-3 neighbors (creating mesh)
             let next = (i + 1) % router_ids.len();
@@ -228,11 +228,11 @@ mod tests {
     use crate::core::{LocalBus, ResourceManager, ZoooidTopology};
     use crate::RuleEngine;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, RwLock};
 
     #[tokio::test]
     async fn test_physarum_router_creation() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -256,7 +256,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_traffic_simulation() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -280,7 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_path_recording() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());

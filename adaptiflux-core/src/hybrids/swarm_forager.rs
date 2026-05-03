@@ -94,7 +94,7 @@ impl SwarmForagerArchitecture {
         pheromone_levels.insert(forager_id, config.pheromone_strength);
 
         // Create a fully connected topology (all agents can communicate)
-        let mut topology = scheduler.topology.lock().await;
+        let mut topology = scheduler.topology.write().await;
         for i in 0..agent_ids.len() {
             for j in 0..agent_ids.len() {
                 if i != j {
@@ -147,11 +147,11 @@ mod tests {
     use crate::core::{LocalBus, ResourceManager, ZoooidTopology};
     use crate::RuleEngine;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, RwLock};
 
     #[tokio::test]
     async fn test_swarm_forager_creation() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -174,7 +174,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pheromone_dynamics() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -211,7 +211,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_swarm_connectivity() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -228,7 +228,7 @@ mod tests {
             .await
             .expect("Failed to create swarm");
 
-        let topology_guard = scheduler.topology.lock().await;
+        let topology_guard = scheduler.topology.read().await;
 
         // In a fully connected swarm, each agent should have connections
         for &agent_id in &swarm.agent_ids {

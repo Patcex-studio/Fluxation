@@ -81,6 +81,7 @@ impl SensorProcessorControllerArchitecture {
                 stdp_tau_minus: 20.0,
                 weight_decay: 0.0001,
                 pruning_threshold: 0.001,
+                enable_simd_batch: false,
             },
         };
 
@@ -106,7 +107,7 @@ impl SensorProcessorControllerArchitecture {
         scheduler.spawn_agent(controller_zooid).await?;
 
         // Establish connections: Sensor -> Processor -> Controller
-        let mut topology = scheduler.topology.lock().await;
+        let mut topology = scheduler.topology.write().await;
         topology.add_edge(
             sensor_id,
             processor_id,
@@ -133,11 +134,11 @@ mod tests {
     use crate::core::{LocalBus, ResourceManager, ZoooidTopology};
     use crate::RuleEngine;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, RwLock};
 
     #[tokio::test]
     async fn test_sensor_processor_controller_creation() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -157,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sensor_processor_controller_message_flow() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -171,7 +172,7 @@ mod tests {
             .expect("Failed to create architecture");
 
         // Verify topology connections
-        let topology_guard = scheduler.topology.lock().await;
+        let topology_guard = scheduler.topology.read().await;
         let connections = topology_guard.get_neighbors(arch.sensor_id);
         assert!(
             !connections.is_empty(),

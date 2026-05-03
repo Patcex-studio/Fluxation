@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
 
@@ -133,8 +133,8 @@ pub struct MemoryAttentionHook {
 pub struct CoreScheduler {
     /// Map of agent IDs to their handles for lifecycle management
     pub agents: HashMap<ZoooidId, ZoooidHandle>,
-    /// Dynamic topology graph of agent connections, protected by mutex for thread safety
-    pub topology: Arc<Mutex<ZoooidTopology>>,
+    /// Dynamic topology graph of agent connections, protected by RwLock for parallel reads
+    pub topology: Arc<RwLock<ZoooidTopology>>,
     /// Engine for applying plasticity rules to adapt the topology
     pub rule_engine: RuleEngine,
     /// Manager for computational resource allocation and monitoring
@@ -216,7 +216,7 @@ impl CoreScheduler {
     /// let scheduler = CoreScheduler::new(topology, rule_engine, resource_manager, message_bus);
     /// ```
     pub fn new(
-        topology: Arc<Mutex<ZoooidTopology>>,
+        topology: Arc<RwLock<ZoooidTopology>>,
         rule_engine: RuleEngine,
         resource_manager: ResourceManager,
         message_bus: Arc<dyn MessageBus + Send + Sync>,
@@ -248,7 +248,7 @@ impl CoreScheduler {
 
     #[cfg(feature = "gpu")]
     pub fn new_with_gpu(
-        topology: Arc<Mutex<ZoooidTopology>>,
+        topology: Arc<RwLock<ZoooidTopology>>,
         rule_engine: RuleEngine,
         resource_manager: ResourceManager,
         message_bus: Arc<dyn MessageBus + Send + Sync>,
@@ -364,7 +364,7 @@ impl CoreScheduler {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let agent_id = agent.id;
         self.message_bus.register_agent(agent_id).await?;
-        self.topology.lock().await.add_node(agent_id);
+        self.topology.write().await.add_node(agent_id);
 
         #[cfg(feature = "gpu")]
         let gpu_allocated = if agent.blueprint.supports_gpu() {
@@ -406,7 +406,7 @@ impl CoreScheduler {
     /// Remove an agent and its topology node (e.g. simulated failure / external kill).
     pub async fn remove_agent_from_system(&mut self, id: ZoooidId) {
         if self.agents.remove(&id).is_some() {
-            self.topology.lock().await.remove_node(id);
+            self.topology.write().await.remove_node(id);
             info!("remove_agent_from_system: dropped {}", id);
         }
     }
@@ -442,7 +442,7 @@ impl CoreScheduler {
             let agent = Zoooid::new(id, blueprint).await?;
             self.spawn_agent(agent).await?;
             if let Some(near) = area_hint {
-                let mut topo = self.topology.lock().await;
+                let mut topo = self.topology.write().await;
                 topo.add_edge(near, id, ConnectionProperties::default());
                 extra_edge_ops += 1;
                 drop(topo);
@@ -453,7 +453,7 @@ impl CoreScheduler {
         }
         for (id, reason) in effects.terminate_requests {
             if self.agents.remove(&id).is_some() {
-                self.topology.lock().await.remove_node(id);
+                self.topology.write().await.remove_node(id);
                 match &reason {
                     Some(r) => info!("Topology lifecycle: removed {} ({})", id, r),
                     None => info!("Topology lifecycle: removed {}", id),
@@ -499,7 +499,7 @@ impl CoreScheduler {
         let metrics_phase_start = Instant::now();
         // Phase 1: Metrics (before rules)
         let metrics = {
-            let topology_guard = self.topology.lock().await;
+            let topology_guard = self.topology.read().await;
             SystemMetrics::from_topology(&topology_guard)
         };
         let metrics_phase_duration_ms = metrics_phase_start.elapsed().as_secs_f64() * 1000.0;
@@ -542,11 +542,11 @@ impl CoreScheduler {
 
         // Phase 2b: Structural plasticity (signals from previous iteration)
         let metrics_plasticity = {
-            let g = self.topology.lock().await;
+            let g = self.topology.read().await;
             SystemMetrics::from_topology(&g)
         };
         let plasticity_ctx = {
-            let topo = self.topology.lock().await;
+            let topo = self.topology.read().await;
             self.plasticity_state.snapshot_plasticity_context(&topo)
         };
 
@@ -683,7 +683,7 @@ impl CoreScheduler {
         }
 
         let topology_snapshot = {
-            let topology_guard = self.topology.lock().await;
+            let topology_guard = self.topology.read().await;
             topology_guard.clone()
         };
 
@@ -780,7 +780,7 @@ impl CoreScheduler {
                         result.output_messages.len() as crate::utils::types::StateValue,
                     );
                     if !result.output_messages.is_empty() {
-                        let neighbors = self.topology.lock().await.get_neighbors(agent_id);
+                        let neighbors = self.topology.read().await.get_neighbors(agent_id);
                         if !neighbors.is_empty() {
                             debug!(
                                 "Agent {} sending {} messages to {} neighbors",
@@ -813,7 +813,7 @@ impl CoreScheduler {
                     }
 
                     if let Some(change) = result.topology_change_request {
-                        let mut topology = self.topology.lock().await;
+                        let mut topology = self.topology.write().await;
                         match change {
                             crate::core::topology::TopologyChange::RequestConnection(target) => {
                                 topology.add_edge(agent_id, target, Default::default());
@@ -952,7 +952,7 @@ impl CoreScheduler {
         // Phase 5: Optional native cluster pass (complements `TopologyAction::GroupAgents`)
         if let Some(h) = &mut self.hierarchy {
             if h.detect_every > 0 && iteration > 0 && iteration.is_multiple_of(h.detect_every) {
-                let topo = self.topology.lock().await;
+                let topo = self.topology.read().await;
                 let clusters = detect_dense_groups(&topo, h.min_cluster_size);
                 drop(topo);
                 h.manager.sync_from_clusters(clusters, h.aggregation);
@@ -977,7 +977,7 @@ impl CoreScheduler {
         // Phase 7: Clean up terminated agents
         let mut agents_terminated = 0;
         if !terminated_agents.is_empty() {
-            let mut topology = self.topology.lock().await;
+            let mut topology = self.topology.write().await;
             for agent_id in terminated_agents {
                 self.agents.remove(&agent_id);
                 topology.remove_node(agent_id);
@@ -996,7 +996,7 @@ impl CoreScheduler {
 
         self.metrics.iteration_count = iteration;
         self.metrics.total_agents = self.agents.len();
-        self.metrics.total_connections = self.topology.lock().await.graph.edge_count();
+        self.metrics.total_connections = self.topology.read().await.graph.edge_count();
         self.metrics.agents_updated = agents_updated;
         self.metrics.agents_terminated = agents_terminated;
         self.metrics.topology_changes = topology_changes;

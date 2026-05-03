@@ -27,8 +27,9 @@ use crate::core::message_bus::message::Message;
 use crate::core::topology::{TopologyChange, ZoooidTopology};
 use crate::memory::types::MemoryPayload;
 use crate::primitives::base::PrimitiveMessage;
+use crate::primitives::spiking::{IzhikevichBatch, IzhikevichBatchParams};
 use crate::primitives::spiking::izhikevich::{IzhikevichNeuron, IzhikevichParams, IzhikevichState};
-use crate::utils::types::ZoooidId;
+use crate::utils::types::{StateValue, ZoooidId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitivezooidParams {
@@ -47,10 +48,32 @@ pub struct CognitivezooidParams {
     pub weight_decay: f32,
     #[serde(default = "default_pruning_threshold")]
     pub pruning_threshold: f32,
+    #[serde(default = "default_enable_simd_batch")]
+    pub enable_simd_batch: bool,
 }
 
 fn default_connection_request_interval() -> u64 {
     10
+}
+
+fn default_enable_simd_batch() -> bool {
+    false
+}
+
+impl Default for CognitivezooidParams {
+    fn default() -> Self {
+        Self {
+            izh_params: IzhikevichParams::default(),
+            connection_request_interval: default_connection_request_interval(),
+            stdp_a_plus: default_stdp_a_plus(),
+            stdp_a_minus: default_stdp_a_minus(),
+            stdp_tau_plus: default_stdp_tau_plus(),
+            stdp_tau_minus: default_stdp_tau_minus(),
+            weight_decay: default_weight_decay(),
+            pruning_threshold: default_pruning_threshold(),
+            enable_simd_batch: default_enable_simd_batch(),
+        }
+    }
 }
 
 fn default_stdp_a_plus() -> f32 {
@@ -85,6 +108,10 @@ pub struct CognitivezooidState {
     pub spike_count: u64,
     pub last_pre_spike_times: HashMap<ZoooidId, u64>, // For STDP timing
     pub synapse_manager: SynapseManager, // Centralized synapse management (replaces Vec<ZoooidId> + Vec<f32>)
+    /// ⚡ SIMD batch mode for future multi-neuron agents (PERF-003)
+    /// When Some: processes N neurons in groups of 4 (3-4x speedup)
+    /// When None: uses scalar Izhikevich neuron (single neuron)
+    pub simd_batch: Option<IzhikevichBatch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +144,17 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             spike_count: 0,
             last_pre_spike_times: HashMap::new(),
             synapse_manager: SynapseManager::new(synapse_config),
+            simd_batch: if self.params.enable_simd_batch {
+                Some(IzhikevichBatch::new(1, &IzhikevichBatchParams::from_scalar(
+                    self.params.izh_params.a,
+                    self.params.izh_params.b,
+                    self.params.izh_params.c,
+                    self.params.izh_params.d,
+                    self.params.izh_params.dt,
+                )))
+            } else {
+                None
+            },
         }))
     }
 
@@ -152,14 +190,53 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             .collect();
 
         // Phase 3: Update Izhikevich neuron state
-        let (new_izh_state, primitive_outputs) =
-            <IzhikevichNeuron as crate::primitives::base::Primitive>::update(
-                state.izh_state.clone(),
-                &state.izh_params,
-                &primitive_inputs,
-            );
+        let primitive_outputs = if let Some(batch) = &mut state.simd_batch {
+            let mut currents = [0.0f32; 4];
+            let mut lane = 0;
+            for prim_msg in &primitive_inputs {
+                if let PrimitiveMessage::InputCurrent(value) = prim_msg {
+                    if lane < 4 {
+                        currents[lane] = *value as f32;
+                        lane += 1;
+                    } else {
+                        currents[0] += *value as f32;
+                    }
+                }
+            }
 
-        state.izh_state = new_izh_state;
+            let params_simd = IzhikevichBatchParams::from_scalar(
+                state.izh_params.a,
+                state.izh_params.b,
+                state.izh_params.c,
+                state.izh_params.d,
+                state.izh_params.dt,
+            );
+            batch.update(&[wide::f32x4::from(currents)], &params_simd);
+
+            let voltages = batch.get_v();
+            let adaptations = batch.get_u();
+            state.izh_state.v = voltages[0] as StateValue;
+            state.izh_state.u = adaptations[0] as StateValue;
+
+            let mut outputs = Vec::new();
+            if batch.spike_count() > 0 {
+                outputs.push(PrimitiveMessage::Spike {
+                    timestamp: state.tick_count,
+                    amplitude: 1.0,
+                });
+            }
+            outputs
+        } else {
+            let (new_izh_state, primitive_outputs) =
+                <IzhikevichNeuron as crate::primitives::base::Primitive>::update(
+                    state.izh_state.clone(),
+                    &state.izh_params,
+                    &primitive_inputs,
+                );
+
+            state.izh_state = new_izh_state;
+            primitive_outputs
+        };
 
         // Count spikes
         let has_spiked = primitive_outputs.iter().any(|prim_msg| matches!(prim_msg, PrimitiveMessage::Spike { .. }));
@@ -239,5 +316,37 @@ impl AgentBlueprint for CognitivezooidBlueprint {
 
     fn blueprint_type(&self) -> RoleType {
         RoleType::Cognitive
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::topology::ZoooidTopology;
+    use crate::core::message_bus::message::Message;
+    use crate::utils::types::ZoooidId;
+
+    #[tokio::test]
+    async fn cognitivezooid_simd_branch_spikes() {
+        let blueprint = CognitivezooidBlueprint {
+            params: CognitivezooidParams {
+                enable_simd_batch: true,
+                ..Default::default()
+            },
+        };
+
+        let mut state = blueprint.initialize().await.unwrap();
+        let sender = ZoooidId::new_v4();
+        let inputs = vec![(sender, Message::AnalogInput(1000.0))];
+
+        let result = blueprint
+            .update(&mut state, inputs, &ZoooidTopology::new(), None)
+            .await
+            .unwrap();
+
+        assert!(result
+            .output_messages
+            .iter()
+            .any(|msg| matches!(msg, Message::SpikeEvent { .. })));
     }
 }

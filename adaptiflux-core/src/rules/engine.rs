@@ -26,6 +26,7 @@ use crate::rules::consistency::ConsistencyCheck;
 use crate::rules::topology::{TopologyAction, TopologyRule};
 use crate::rules::PlasticityRule;
 use crate::utils::types::ZoooidId;
+use tokio::sync::RwLock;
 
 /// Main rule engine that orchestrates behavior rules, topology rules, and consistency checks
 pub struct RuleEngine {
@@ -112,10 +113,10 @@ impl RuleEngine {
     /// Run topology rules to generate topology modifications
     pub async fn run_topology_rules(
         &self,
-        topology: &Arc<tokio::sync::Mutex<ZoooidTopology>>,
+        topology: &Arc<RwLock<ZoooidTopology>>,
         metrics: &SystemMetrics,
     ) -> Result<Vec<TopologyAction>, Box<dyn std::error::Error + Send + Sync>> {
-        let topology = topology.lock().await;
+        let topology = topology.read().await;
         let mut actions = Vec::new();
 
         for rule in &self.topology_rules {
@@ -131,11 +132,11 @@ impl RuleEngine {
     /// Respects global topology density threshold to prevent exponential growth.
     pub async fn run_plasticity_rules(
         &self,
-        topology: &Arc<tokio::sync::Mutex<ZoooidTopology>>,
+        topology: &Arc<RwLock<ZoooidTopology>>,
         metrics: &SystemMetrics,
         ctx: &PlasticityContext,
     ) -> Result<Vec<TopologyAction>, Box<dyn std::error::Error + Send + Sync>> {
-        let topology = topology.lock().await;
+        let topology = topology.read().await;
         let mut actions = Vec::new();
 
         // Check global topology density - if too high, skip growth-oriented rules
@@ -171,10 +172,10 @@ impl RuleEngine {
     /// Apply topology actions: mutates graph weights and edges; defers agent lifecycle to scheduler.
     pub async fn apply_topology_actions(
         &self,
-        topology_mutex: &Arc<tokio::sync::Mutex<ZoooidTopology>>,
+        topology_mutex: &Arc<RwLock<ZoooidTopology>>,
         actions: Vec<TopologyAction>,
     ) -> Result<AppliedTopologyEffects, Box<dyn std::error::Error + Send + Sync>> {
-        let mut topology = topology_mutex.lock().await;
+        let mut topology = topology_mutex.write().await;
         let mut effects = AppliedTopologyEffects::default();
 
         for action in actions {
@@ -245,10 +246,10 @@ impl RuleEngine {
     /// Run all consistency checks
     pub async fn run_consistency_checks(
         &self,
-        topology: &tokio::sync::Mutex<ZoooidTopology>,
+        topology: &Arc<RwLock<ZoooidTopology>>,
         agents: &[ZoooidId],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let topology = topology.lock().await;
+        let topology = topology.read().await;
 
         for check in &self.consistency_checks {
             check.check(&topology, agents)?;
@@ -261,7 +262,7 @@ impl RuleEngine {
     pub async fn run_full_cycle(
         &self,
         agent_states: &std::collections::HashMap<ZoooidId, Box<dyn Any + Send>>,
-        topology_mutex: &Arc<tokio::sync::Mutex<ZoooidTopology>>,
+        topology_mutex: &Arc<RwLock<ZoooidTopology>>,
         bus: &dyn MessageBus,
         agent_ids: &[ZoooidId],
         plasticity_ctx: &PlasticityContext,
@@ -272,7 +273,7 @@ impl RuleEngine {
         ),
         Box<dyn std::error::Error + Send + Sync>,
     > {
-        let topology = topology_mutex.lock().await;
+        let topology = topology_mutex.read().await;
 
         // 1. Run behavior rules
         let behavior_actions = self
@@ -282,7 +283,7 @@ impl RuleEngine {
         drop(topology);
 
         // 2. Compute metrics and run topology rules
-        let topology_locked = topology_mutex.lock().await;
+        let topology_locked = topology_mutex.read().await;
         let metrics = SystemMetrics::from_topology(&topology_locked);
         drop(topology_locked);
 

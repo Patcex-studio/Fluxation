@@ -1324,7 +1324,7 @@ async fn scheduler_initializes_gpu_resources() -> Result<(), Box<dyn std::error:
     let _gpu_guard = gpu_test_lock();
     let gpu_manager = Arc::new(Mutex::new(GpuResourceManager::new().await?));
     let scheduler = CoreScheduler::new_with_gpu(
-        Arc::new(Mutex::new(ZoooidTopology::new())),
+        Arc::new(RwLock::new(ZoooidTopology::new())),
         RuleEngine::new(),
         ResourceManager::new(),
         Arc::new(LocalBus::new()),
@@ -1339,7 +1339,7 @@ async fn scheduler_initializes_gpu_resources() -> Result<(), Box<dyn std::error:
 #[test]
 fn scheduler_falls_back_to_cpu_when_gpu_disabled() {
     let mut scheduler = CoreScheduler::new_with_gpu(
-        Arc::new(Mutex::new(ZoooidTopology::new())),
+        Arc::new(RwLock::new(ZoooidTopology::new())),
         RuleEngine::new(),
         ResourceManager::new(),
         Arc::new(LocalBus::new()),

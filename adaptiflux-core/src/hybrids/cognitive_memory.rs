@@ -99,6 +99,7 @@ impl CognitiveMemoryArchitecture {
                     stdp_tau_minus: 20.0,
                     weight_decay: 0.0001,
                     pruning_threshold: 0.001,
+                    enable_simd_batch: false,
                 },
             };
 
@@ -110,7 +111,7 @@ impl CognitiveMemoryArchitecture {
         }
 
         // Create recurrent connections based on connection_density
-        let mut topology = scheduler.topology.lock().await;
+        let mut topology = scheduler.topology.write().await;
         for i in 0..neuron_ids.len() {
             for j in 0..neuron_ids.len() {
                 if i != j {
@@ -194,7 +195,7 @@ impl CognitiveMemoryArchitecture {
 
     /// Get network connectivity statistics
     pub async fn get_connectivity_stats(&self, scheduler: &CoreScheduler) -> (usize, usize) {
-        let topology = scheduler.topology.lock().await;
+        let topology = scheduler.topology.read().await;
         let mut total_connections = 0;
 
         for &neuron_id in &self.neuron_ids {
@@ -213,11 +214,11 @@ mod tests {
     use crate::core::{LocalBus, ResourceManager, ZoooidTopology};
     use crate::RuleEngine;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, RwLock};
 
     #[tokio::test]
     async fn test_cognitive_memory_creation() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -240,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_activity_recording() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -273,7 +274,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_activity_level_calculation() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
@@ -313,7 +314,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_network_recurrency() {
-        let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
         let rule_engine = RuleEngine::new();
         let resource_manager = ResourceManager::new();
         let message_bus = Arc::new(LocalBus::new());
