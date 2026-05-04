@@ -44,7 +44,7 @@ Fluxation reimagines AI as a decentralized, event-driven network of heterogeneou
 ---
 <div align="center">
 
-**BUGINE ENGINE**  
+**FLUXATION AI**  
 *An open quackalog of modern complex libraries. Just getting started.*  
 **PatceX Studio** © 2026 | *Patching Simulated Reality*
 
