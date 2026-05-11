@@ -18,6 +18,7 @@
 pub mod buffer_manager;
 pub mod config;
 pub mod context;
+pub mod izhikevich_compute;
 pub mod primitive_wrappers;
 pub mod resource_manager;
 pub mod shader_runner;
@@ -26,6 +27,9 @@ pub mod shaders;
 pub use buffer_manager::BufferManager;
 pub use config::GpuConfig;
 pub use context::{GpuContext, GpuDeviceInfo};
+pub use izhikevich_compute::{
+    GpuIzhikevichBatch, IzhikevichGpuCompute, IZHIKEVICH_COMPUTE_SHADER,
+};
 pub use primitive_wrappers::{
     BatchIzhikevichParams, BatchIzhikevichPrimitive, BatchIzhikevichState,
 };

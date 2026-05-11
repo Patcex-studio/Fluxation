@@ -46,7 +46,7 @@ use std::any::Any;
 #[cfg(feature = "gpu")]
 use std::sync::Arc;
 #[cfg(feature = "gpu")]
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 #[cfg(feature = "gpu")]
 struct GpuIzhikevichBlueprint {
@@ -80,7 +80,7 @@ impl AgentBlueprint for GpuIzhikevichBlueprint {
     async fn update(
         &self,
         state: &mut Box<dyn Any + Send + Sync>,
-        inputs: Vec<Message>,
+        inputs: Vec<(uuid::Uuid, Message)>,
         _topology: &ZoooidTopology,
         _memory: Option<&MemoryPayload>,
     ) -> Result<
@@ -89,7 +89,7 @@ impl AgentBlueprint for GpuIzhikevichBlueprint {
     > {
         let primitive_inputs: Vec<PrimitiveMessage> = inputs
             .into_iter()
-            .filter_map(|message| match message {
+            .filter_map(|(_sender, message)| match message {
                 Message::AnalogInput(value) => Some(PrimitiveMessage::InputCurrent(value)),
                 _ => None,
             })
@@ -141,9 +141,9 @@ impl AgentBlueprint for GpuIzhikevichBlueprint {
 
 #[cfg(feature = "gpu")]
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let gpu_manager = Arc::new(Mutex::new(GpuResourceManager::new().await?));
-    let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
     let message_bus: Arc<dyn MessageBus + Send + Sync> = Arc::new(LocalBus::new());
     let rule_engine = RuleEngine::new();
     let resource_manager = ResourceManager::new();

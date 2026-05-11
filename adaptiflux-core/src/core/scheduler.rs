@@ -28,7 +28,7 @@ use std::time::Instant;
 use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, info_span, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::agent::zoooid::Zoooid;
 use crate::attention::apply_attention_to_hits;
@@ -111,25 +111,29 @@ pub struct MemoryAttentionHook {
 /// ```rust,no_run
 /// use adaptiflux_core::{CoreScheduler, ZoooidTopology, RuleEngine, ResourceManager, LocalBus};
 /// use std::sync::Arc;
-/// use tokio::sync::Mutex;
+/// use tokio::sync::RwLock;
 ///
-/// // Create components
-/// let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
-/// let rule_engine = RuleEngine::new();
-/// let resource_manager = ResourceManager::new();
-/// let message_bus = Arc::new(LocalBus::new());
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+///     // Create components
+///     let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
+///     let rule_engine = RuleEngine::new();
+///     let resource_manager = ResourceManager::new();
+///     let message_bus = Arc::new(LocalBus::new());
 ///
-/// // Create scheduler
-/// let mut scheduler = CoreScheduler::new(
-///     topology,
-///     rule_engine,
-///     resource_manager,
-///     message_bus,
-/// );
+///     // Create scheduler
+///     let mut scheduler = CoreScheduler::new(
+///         topology,
+///         rule_engine,
+///         resource_manager,
+///         message_bus,
+///     );
 ///
-/// // Add agents and run
-/// // ... add agents ...
-/// scheduler.run().unwrap();
+///     // Add agents and run
+///     // ... add agents ...
+///     scheduler.run().await?;
+///     Ok(())
+/// }
 /// ```
 pub struct CoreScheduler {
     /// Map of agent IDs to their handles for lifecycle management
@@ -223,9 +227,9 @@ impl CoreScheduler {
     /// ```rust,no_run
     /// use adaptiflux_core::{CoreScheduler, ZoooidTopology, RuleEngine, ResourceManager, LocalBus};
     /// use std::sync::Arc;
-    /// use tokio::sync::Mutex;
+    /// use tokio::sync::RwLock;
     ///
-    /// let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    /// let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
     /// let rule_engine = RuleEngine::new();
     /// let resource_manager = ResourceManager::new();
     /// let message_bus = Arc::new(LocalBus::new());
@@ -368,8 +372,8 @@ impl CoreScheduler {
     /// use adaptiflux_core::{CoreScheduler, Zoooid, ZoooidId, AgentBlueprint};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    /// # let mut scheduler = // ... create scheduler
-    /// # let blueprint: Box<dyn AgentBlueprint + Send + Sync> = // ... create blueprint
+    /// # let mut scheduler: CoreScheduler = todo!();
+    /// # let blueprint: Box<dyn AgentBlueprint + Send + Sync> = todo!();
     /// let agent = Zoooid::new(ZoooidId::new_v4(), blueprint).await?;
     /// scheduler.spawn_agent(agent).await?;
     /// # Ok(())
@@ -492,14 +496,14 @@ impl CoreScheduler {
     async fn update_agents_parallel(
         &self,
         pending_updates: Vec<PendingAgentUpdate>,
-        topology_snapshot: ZoooidTopology,
+        topology_snapshot: Arc<ZoooidTopology>,
         config: AsyncOptimizationConfig,
     ) -> Vec<AgentUpdateOutcome> {
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_updates));
         let mut join_set = JoinSet::new();
 
         for pending in pending_updates {
-            let topology_snapshot = topology_snapshot.clone();
+            let topology_snapshot = Arc::clone(&topology_snapshot);
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(async move {
                 let _permit = permit;
@@ -517,7 +521,7 @@ impl CoreScheduler {
                     .update(
                         &mut handle.state,
                         inputs_for_update.clone(),
-                        &topology_snapshot,
+                        topology_snapshot.as_ref(),
                         mem_for_update.as_ref(),
                     )
                     .await
@@ -571,18 +575,15 @@ impl CoreScheduler {
     }
 
     async fn iteration_step(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let _iteration_span = info_span!("iteration_step", iteration = self.plasticity_state.global_iteration).entered();
         let iter_start = Instant::now();
         let iteration = self.plasticity_state.global_iteration;
 
-        let _metrics_span = info_span!("metrics").entered();
         let metrics_phase_start = Instant::now();
         // Phase 1: Metrics (before rules)
         let metrics = {
             let topology_guard = self.topology.read().await;
             SystemMetrics::from_topology(&topology_guard)
         };
-        drop(_metrics_span);
         let metrics_phase_duration_ms = metrics_phase_start.elapsed().as_secs_f64() * 1000.0;
 
         debug!(
@@ -592,7 +593,6 @@ impl CoreScheduler {
 
         let mut topology_changes = 0usize;
         let topology_rules_phase_start = Instant::now();
-        let _topology_rules_span = info_span!("topology_rules").entered();
 
         // Phase 2a: Classical topology rules → apply → lifecycle
         match self
@@ -619,7 +619,6 @@ impl CoreScheduler {
             }
             Err(e) => error!("Topology rule execution failed: {}", e),
         }
-        drop(_topology_rules_span);
         let topology_rules_phase_duration_ms =
             topology_rules_phase_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -634,7 +633,6 @@ impl CoreScheduler {
         };
 
         let plasticity_rules_phase_start = Instant::now();
-        let _plasticity_rules_span = info_span!("plasticity_rules").entered();
         match self
             .rule_engine
             .run_plasticity_rules(&self.topology, &metrics_plasticity, &plasticity_ctx)
@@ -659,7 +657,6 @@ impl CoreScheduler {
             }
             Err(e) => error!("Plasticity rule execution failed: {}", e),
         }
-        drop(_plasticity_rules_span);
         let plasticity_rules_phase_duration_ms =
             plasticity_rules_phase_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -751,10 +748,10 @@ impl CoreScheduler {
             }
         }
 
-        let topology_snapshot = {
+        let topology_snapshot = Arc::new({
             let topology_guard = self.topology.read().await;
             topology_guard.clone()
-        };
+        });
 
         let config = self
             .async_optimization
@@ -762,11 +759,9 @@ impl CoreScheduler {
             .unwrap_or_else(|| AsyncOptimizationConfig::new(num_cpus::get()));
 
         let update_phase_start = std::time::Instant::now();
-        let _update_agents_span = info_span!("update_agents").entered();
         let outcomes = self
-            .update_agents_parallel(pending_updates, topology_snapshot, config)
+            .update_agents_parallel(pending_updates, Arc::clone(&topology_snapshot), config)
             .await;
-        drop(_update_agents_span);
         let update_phase_duration_ms = update_phase_start.elapsed().as_secs_f64() * 1000.0;
         debug!(
             "Iteration {} agent update phase duration: {:.2}ms",
@@ -798,7 +793,7 @@ impl CoreScheduler {
                         result.output_messages.len() as crate::utils::types::StateValue,
                     );
                     if !result.output_messages.is_empty() {
-                        let neighbors = self.topology.read().await.get_neighbors(agent_id);
+                        let neighbors = topology_snapshot.get_neighbors(agent_id);
                         if !neighbors.is_empty() {
                             debug!(
                                 "Agent {} sending {} messages to {} neighbors",
@@ -1109,7 +1104,7 @@ impl CoreScheduler {
     /// use adaptiflux_core::CoreScheduler;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    /// # let mut scheduler = // ... create and configure scheduler
+    /// # let mut scheduler: CoreScheduler = todo!();
     /// scheduler.run().await?;
     /// # Ok(())
     /// # }

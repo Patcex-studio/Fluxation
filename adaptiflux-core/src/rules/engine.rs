@@ -116,7 +116,10 @@ impl RuleEngine {
         topology: &Arc<RwLock<ZoooidTopology>>,
         metrics: &SystemMetrics,
     ) -> Result<Vec<TopologyAction>, Box<dyn std::error::Error + Send + Sync>> {
-        let topology = topology.read().await;
+        let topology = {
+            let topology_guard = topology.read().await;
+            topology_guard.clone()
+        };
         let mut actions = Vec::new();
 
         for rule in &self.topology_rules {
@@ -136,7 +139,10 @@ impl RuleEngine {
         metrics: &SystemMetrics,
         ctx: &PlasticityContext,
     ) -> Result<Vec<TopologyAction>, Box<dyn std::error::Error + Send + Sync>> {
-        let topology = topology.read().await;
+        let topology = {
+            let topology_guard = topology.read().await;
+            topology_guard.clone()
+        };
         let mut actions = Vec::new();
 
         // Check global topology density - if too high, skip growth-oriented rules
@@ -249,7 +255,10 @@ impl RuleEngine {
         topology: &Arc<RwLock<ZoooidTopology>>,
         agents: &[ZoooidId],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let topology = topology.read().await;
+        let topology = {
+            let topology_guard = topology.read().await;
+            topology_guard.clone()
+        };
 
         for check in &self.consistency_checks {
             check.check(&topology, agents)?;
@@ -273,19 +282,18 @@ impl RuleEngine {
         ),
         Box<dyn std::error::Error + Send + Sync>,
     > {
-        let topology = topology_mutex.read().await;
+        let topology = {
+            let topology_guard = topology_mutex.read().await;
+            topology_guard.clone()
+        };
 
         // 1. Run behavior rules
         let behavior_actions = self
             .run_behavior_rules_internal(agent_states, &topology, bus)
             .await?;
 
-        drop(topology);
-
         // 2. Compute metrics and run topology rules
-        let topology_locked = topology_mutex.read().await;
-        let metrics = SystemMetrics::from_topology(&topology_locked);
-        drop(topology_locked);
+        let metrics = SystemMetrics::from_topology(&topology);
 
         let mut topology_actions = self.run_topology_rules(topology_mutex, &metrics).await?;
         let plasticity_actions = self

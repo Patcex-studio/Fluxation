@@ -92,6 +92,7 @@ impl CognitiveMemoryArchitecture {
             let blueprint = CognitivezooidBlueprint {
                 params: CognitivezooidParams {
                     izh_params: config.izh_params.clone(),
+                        use_simd: true,
                     connection_request_interval: 10,
                     stdp_a_plus: 0.01,
                     stdp_a_minus: 0.005,

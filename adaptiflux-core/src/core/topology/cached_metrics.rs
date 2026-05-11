@@ -48,17 +48,17 @@ impl CachedMetrics {
 
     /// Mark cache as needing recomputation.
     pub fn invalidate(&self) {
-        self.inner.dirty.store(true, Ordering::Relaxed);
+        self.inner.dirty.store(true, Ordering::Release);
     }
 
     /// Check if cache is dirty (needs recomputation).
     pub fn is_dirty(&self) -> bool {
-        self.inner.dirty.load(Ordering::Relaxed)
+        self.inner.dirty.load(Ordering::Acquire)
     }
 
     /// Mark cache as clean after recomputation.
     pub fn mark_clean(&self) {
-        self.inner.dirty.store(false, Ordering::Relaxed);
+        self.inner.dirty.store(false, Ordering::Release);
     }
 
     /// Set clustering coefficient and mark clean.
@@ -96,7 +96,7 @@ impl CachedMetrics {
         *self.inner.clustering_coefficient.lock().unwrap() = None;
         *self.inner.network_diameter.lock().unwrap() = None;
         *self.inner.avg_connectivity.lock().unwrap() = None;
-        self.inner.dirty.store(true, Ordering::Relaxed);
+        self.inner.dirty.store(true, Ordering::Release);
     }
 }
 

@@ -79,22 +79,56 @@
 //! ## Usage Example
 //!
 //! ```rust,no_run
-//! use adaptiflux_core::{CoreScheduler, AgentBlueprint, ZoooidHandle};
+//! use adaptiflux_core::{CoreScheduler, AgentBlueprint, Zoooid, ZoooidTopology, RuleEngine, ResourceManager, LocalBus};
+//! use std::sync::Arc;
+//! use tokio::sync::RwLock;
 //!
-//! // Create a scheduler
-//! let mut scheduler = CoreScheduler::new();
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+//!     let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
+//!     let rule_engine = RuleEngine::new();
+//!     let resource_manager = ResourceManager::new();
+//!     let message_bus = Arc::new(LocalBus::new());
 //!
-//! // Define an agent blueprint
-//! struct MyAgent;
-//! impl AgentBlueprint for MyAgent {
-//!     // Implement required methods...
+//!     let mut scheduler = CoreScheduler::new(topology, rule_engine, resource_manager, message_bus);
+//!
+//!     // Define an agent blueprint
+//!     use async_trait::async_trait;
+//!     use std::any::Any;
+//!     use adaptiflux_core::{Message, MemoryPayload, AgentUpdateResult, ZoooidId, RoleType};
+//!
+//!     struct MyAgent;
+//!
+//!     #[async_trait]
+//!     impl AgentBlueprint for MyAgent {
+//!         async fn initialize(&self) -> Result<Box<dyn Any + Send + Sync>, Box<dyn std::error::Error + Send + Sync>> {
+//!             Ok(Box::new(()))
+//!         }
+//!
+//!         async fn update(
+//!             &self,
+//!             state: &mut Box<dyn Any + Send + Sync>,
+//!             inputs: Vec<(ZoooidId, Message)>,
+//!             _topology: &ZoooidTopology,
+//!             _memory: Option<&MemoryPayload>,
+//!         ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
+//!             Ok(AgentUpdateResult::new(Vec::new(), None, None, false))
+//!         }
+//!
+//!         fn blueprint_type(&self) -> RoleType {
+//!             RoleType::Custom("worker".to_string())
+//!         }
+//!     }
+//!
+//!     let blueprint = Box::new(MyAgent);
+//!     let agent = Zoooid::new(ZoooidId::new_v4(), blueprint).await?;
+//!     scheduler.spawn_agent(agent).await?;
+//!
+//!     // Run the scheduler
+//!     scheduler.run().await?;
+//!
+//!     Ok(())
 //! }
-//!
-//! // Add agents to the scheduler
-//! let handle = scheduler.add_agent(Box::new(MyAgent)).unwrap();
-//!
-//! // Run the scheduler
-//! scheduler.run().unwrap();
 //! ```
 //!
 //! For more detailed examples, see the `examples/` directory.

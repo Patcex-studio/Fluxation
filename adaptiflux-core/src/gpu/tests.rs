@@ -22,7 +22,7 @@ use crate::core::topology::ZoooidTopology;
 use crate::rules::RuleEngine;
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use wgpu::util::DeviceExt;
 
 static GPU_TEST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();

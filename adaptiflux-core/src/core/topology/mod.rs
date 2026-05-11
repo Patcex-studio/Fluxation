@@ -301,6 +301,26 @@ pub struct SystemMetrics {
 
 impl SystemMetrics {
     pub fn from_topology(topology: &ZoooidTopology) -> Self {
+        if !topology.metrics_cache.is_dirty() {
+            if let (Some(avg_connectivity), Some(clustering_coefficient), Some(network_diameter)) = (
+                topology.metrics_cache.get_avg_connectivity(),
+                topology.metrics_cache.get_clustering_coefficient(),
+                topology.metrics_cache.get_network_diameter(),
+            ) {
+                let node_count = topology.graph.node_count();
+                let edge_count = topology.graph.edge_count();
+
+                return Self {
+                    total_zoooids: node_count,
+                    total_connections: edge_count,
+                    avg_connectivity,
+                    clustering_coefficient,
+                    network_diameter,
+                    agent_count: node_count,
+                };
+            }
+        }
+
         let node_count = topology.graph.node_count();
         let edge_count = topology.graph.edge_count();
 
@@ -310,26 +330,20 @@ impl SystemMetrics {
             0.0
         };
 
-        // Use cached metrics if available and cache is clean
-        let (clustering_coefficient, network_diameter, avg_connectivity) = if !topology.metrics_cache.is_dirty() {
-            // Cache is clean - use cached values
-            let cc = topology.metrics_cache.get_clustering_coefficient().unwrap_or(0.0);
-            let nd = topology.metrics_cache.get_network_diameter().unwrap_or(0);
-            let ac = topology.metrics_cache.get_avg_connectivity().unwrap_or(avg_connectivity);
-            (cc, nd, ac)
-        } else {
-            // Cache is dirty - recalculate (O(N²) operation)
-            let cc = Self::calculate_clustering_coefficient(topology);
-            let nd = Self::calculate_network_diameter(topology);
+        // Calculate clustering coefficient (simplified version)
+        let clustering_coefficient = Self::calculate_clustering_coefficient(topology);
 
-            // Store in cache and mark as clean
-            topology.metrics_cache.set_clustering_coefficient(cc);
-            topology.metrics_cache.set_network_diameter(nd);
-            topology.metrics_cache.set_avg_connectivity(avg_connectivity);
-            topology.metrics_cache.mark_clean();
+        // Calculate network diameter (simplified - max distance between nodes)
+        let network_diameter = Self::calculate_network_diameter(topology);
 
-            (cc, nd, avg_connectivity)
-        };
+        topology.metrics_cache.set_avg_connectivity(avg_connectivity);
+        topology
+            .metrics_cache
+            .set_clustering_coefficient(clustering_coefficient);
+        topology
+            .metrics_cache
+            .set_network_diameter(network_diameter);
+        topology.metrics_cache.mark_clean();
 
         Self {
             total_zoooids: node_count,
@@ -387,8 +401,9 @@ impl SystemMetrics {
         }
 
         let mut max_depth = 0;
-        for start_node in nodes.iter().take(3) {
-            // Sample first 3 nodes
+        let sample_count = if nodes.len() > 1_000 { 5 } else { 3 };
+        for start_node in nodes.iter().take(sample_count) {
+            // Sample a small subset of nodes to keep the estimate cheap on large graphs.
             let mut visited = std::collections::HashSet::new();
             let mut queue = std::collections::VecDeque::new();
             queue.push_back((*start_node, 0));

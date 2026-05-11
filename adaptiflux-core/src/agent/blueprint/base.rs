@@ -44,7 +44,7 @@ use crate::utils::types::ZoooidId;
 ///
 /// ```rust,no_run
 /// use async_trait::async_trait;
-/// use adaptiflux_core::{AgentBlueprint, AgentUpdateResult, RoleType, Message, ZoooidTopology};
+/// use adaptiflux_core::{AgentBlueprint, AgentUpdateResult, RoleType, Message, ZoooidId, ZoooidTopology};
 /// use std::any::Any;
 ///
 /// struct MyAgent;
@@ -58,16 +58,16 @@ use crate::utils::types::ZoooidId;
 ///     async fn update(
 ///         &self,
 ///         state: &mut Box<dyn Any + Send + Sync>,
-///         inputs: Vec<Message>,
+///         inputs: Vec<(ZoooidId, Message)>,
 ///         _topology: &ZoooidTopology,
 ///         _memory: Option<&adaptiflux_core::MemoryPayload>,
 ///     ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
 ///         // Update logic here
-///         Ok(AgentUpdateResult::NoChange)
+///         Ok(AgentUpdateResult::new(Vec::new(), None, None, false))
 ///     }
 ///
 ///     fn blueprint_type(&self) -> RoleType {
-///         RoleType::Worker
+///         RoleType::Custom("worker".to_string())
 ///     }
 /// }
 ///

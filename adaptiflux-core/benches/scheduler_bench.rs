@@ -97,7 +97,7 @@ fn bench_scheduler_iteration(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("scheduler_iteration");
 
-    for num_agents in [10, 50, 100, 239].iter() {
+    for num_agents in [10, 50, 100, 239, 1000, 10000].iter() {
         group.bench_function(format!("{}_agents", num_agents), |b| {
             let mut scheduler = rt.block_on(setup_scheduler(*num_agents));
             b.iter(|| {

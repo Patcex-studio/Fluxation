@@ -31,9 +31,173 @@ use crate::primitives::spiking::{IzhikevichBatch, IzhikevichBatchParams, pack_in
 use crate::primitives::spiking::izhikevich::{IzhikevichNeuron, IzhikevichParams, IzhikevichState};
 use crate::utils::types::{StateValue, ZoooidId};
 
+#[cfg(feature = "gpu")]
+use crate::gpu::{GpuContext, IzhikevichGpuCompute};
+
+#[cfg(feature = "gpu")]
+async fn update_gpu_izhikevich_batch(
+    state: &mut CognitivezooidState,
+    primitive_inputs: &[PrimitiveMessage],
+    tick_count: u64,
+) -> Result<Vec<PrimitiveMessage>, Box<dyn std::error::Error + Send + Sync>> {
+    use std::mem::size_of;
+    use std::sync::Arc;
+    use wgpu::util::DeviceExt;
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NeuronState {
+        v: f32,
+        u: f32,
+        spike: u32,
+        pad: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NeuronParams {
+        a: f32,
+        b: f32,
+        c: f32,
+        d: f32,
+        dt: f32,
+        threshold: f32,
+        input_current: f32,
+        pad: u32,
+    }
+
+    let total_input_current: f32 = primitive_inputs
+        .iter()
+        .filter_map(|msg| match msg {
+            PrimitiveMessage::InputCurrent(value) => Some(*value as f32),
+            _ => None,
+        })
+        .sum();
+
+    let num_neurons = state.neuron_count;
+    let batch = state.gpu_batch.as_ref().unwrap();
+
+    let state_data: Vec<NeuronState> = batch
+        .v
+        .iter()
+        .zip(batch.u.iter())
+        .map(|(&v, &u)| NeuronState {
+            v: v as f32,
+            u: u as f32,
+            spike: 0,
+            pad: 0,
+        })
+        .collect();
+
+    let params_data: Vec<NeuronParams> = vec![NeuronParams {
+        a: state.izh_params.a as f32,
+        b: state.izh_params.b as f32,
+        c: state.izh_params.c as f32,
+        d: state.izh_params.d as f32,
+        dt: state.izh_params.dt as f32,
+        threshold: 30.0,
+        input_current: total_input_current,
+        pad: 0,
+    }; num_neurons];
+
+    let context = GpuContext::new().await?;
+    let device = Arc::new(context.device);
+    let queue = Arc::new(context.queue);
+    let gpu_compute = IzhikevichGpuCompute::new(device.clone(), queue.clone())?;
+
+    let state_bytes = unsafe {
+        std::slice::from_raw_parts(
+            state_data.as_ptr() as *const u8,
+            state_data.len() * size_of::<NeuronState>(),
+        )
+    };
+    let params_bytes = unsafe {
+        std::slice::from_raw_parts(
+            params_data.as_ptr() as *const u8,
+            params_data.len() * size_of::<NeuronParams>(),
+        )
+    };
+
+    let state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("izhikevich_gpu_state_buffer"),
+        contents: state_bytes,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    });
+    let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("izhikevich_gpu_params_buffer"),
+        contents: params_bytes,
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let num_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("izhikevich_gpu_num_buffer"),
+        contents: &(num_neurons as u32).to_ne_bytes(),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let result_size = (num_neurons * size_of::<NeuronState>()) as u64;
+    let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("izhikevich_gpu_readback_buffer"),
+        size: result_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    gpu_compute
+        .compute_batch(&state_buffer, &params_buffer, &num_buffer, num_neurons)
+        .await?;
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("izhikevich_gpu_copy_encoder"),
+    });
+    encoder.copy_buffer_to_buffer(&state_buffer, 0, &readback_buffer, 0, result_size);
+    queue.submit(std::iter::once(encoder.finish()));
+
+    use futures::channel::oneshot;
+
+    let buffer_slice = readback_buffer.slice(..);
+    let (sender, receiver) = oneshot::channel();
+    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    device.poll(wgpu::Maintain::Wait);
+    receiver.await??;
+
+    let data = buffer_slice.get_mapped_range();
+    let received: &[NeuronState] = unsafe {
+        std::slice::from_raw_parts(data.as_ptr() as *const NeuronState, num_neurons)
+    };
+
+    let batch_mut = state.gpu_batch.as_mut().unwrap();
+    for (i, received_state) in received.iter().enumerate() {
+        batch_mut.v[i] = received_state.v as StateValue;
+        batch_mut.u[i] = received_state.u as StateValue;
+        batch_mut.spikes[i] = received_state.spike != 0;
+    }
+
+    drop(data);
+    readback_buffer.unmap();
+
+    if num_neurons > 0 {
+        state.izh_state.v = batch_mut.v[0];
+        state.izh_state.u = batch_mut.u[0];
+    }
+
+    let mut outputs = Vec::new();
+    if batch_mut.spike_count() > 0 {
+        outputs.push(PrimitiveMessage::Spike {
+            timestamp: tick_count,
+            amplitude: 1.0,
+        });
+    }
+
+    Ok(outputs)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitivezooidParams {
     pub izh_params: IzhikevichParams,
+    #[serde(default = "default_use_simd")]
+    pub use_simd: bool,
     #[serde(default = "default_connection_request_interval")]
     pub connection_request_interval: u64,
     #[serde(default = "default_stdp_a_plus")]
@@ -56,6 +220,10 @@ fn default_connection_request_interval() -> u64 {
     10
 }
 
+fn default_use_simd() -> bool {
+    true
+}
+
 fn default_neuron_count() -> usize {
     1
 }
@@ -64,6 +232,7 @@ impl Default for CognitivezooidParams {
     fn default() -> Self {
         Self {
             izh_params: IzhikevichParams::default(),
+            use_simd: default_use_simd(),
             connection_request_interval: default_connection_request_interval(),
             stdp_a_plus: default_stdp_a_plus(),
             stdp_a_minus: default_stdp_a_minus(),
@@ -113,6 +282,11 @@ pub struct CognitivezooidState {
     /// When Some: processes N neurons in groups of 4 (3-4x speedup)
     /// When None: uses scalar Izhikevich neuron (single neuron)
     pub simd_batch: Option<IzhikevichBatch>,
+    /// 🔧 GPU batch mode (PERF-003 GPU acceleration)
+    /// When Some: processes N neurons on GPU compute shader (10-100x speedup for >1000 neurons)
+    /// When None: uses CPU (SIMD or scalar)
+    #[cfg(feature = "gpu")]
+    pub gpu_batch: Option<crate::gpu::GpuIzhikevichBatch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +313,14 @@ impl AgentBlueprint for CognitivezooidBlueprint {
         };
 
         let neuron_count = self.params.neuron_count.max(1);
-        let use_simd = neuron_count >= 4;
+        let use_simd = self.params.use_simd && neuron_count >= 4;
+
+        #[cfg(feature = "gpu")]
+        let gpu_batch = if neuron_count >= 1024 {
+            Some(crate::gpu::GpuIzhikevichBatch::new(neuron_count))
+        } else {
+            None
+        };
 
         Ok(Box::new(CognitivezooidState {
             izh_state,
@@ -163,6 +344,8 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             } else {
                 None
             },
+            #[cfg(feature = "gpu")]
+            gpu_batch,
         }))
     }
 
@@ -198,6 +381,59 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             .collect();
 
         // Phase 3: Update Izhikevich neuron state
+        #[cfg(feature = "gpu")]
+        let primitive_outputs = if let Some(_) = &mut state.gpu_batch {
+            update_gpu_izhikevich_batch(state, &primitive_inputs, state.tick_count).await?
+        } else if let Some(batch) = &mut state.simd_batch {
+            debug_assert_eq!(batch.neuron_count, state.neuron_count);
+
+            let input_currents: Vec<StateValue> = primitive_inputs
+                .iter()
+                .filter_map(|msg| match msg {
+                    PrimitiveMessage::InputCurrent(value) => Some(*value),
+                    _ => None,
+                })
+                .collect();
+            let packed_inputs = pack_input_currents(&input_currents);
+
+            let params_simd = IzhikevichBatchParams::from_scalar(
+                state.izh_params.a,
+                state.izh_params.b,
+                state.izh_params.c,
+                state.izh_params.d,
+                state.izh_params.dt,
+            );
+            batch.update(&packed_inputs, &params_simd);
+
+            let voltages = batch.get_v();
+            let adaptations = batch.get_u();
+            if !voltages.is_empty() {
+                state.izh_state.v = voltages[0] as StateValue;
+            }
+            if !adaptations.is_empty() {
+                state.izh_state.u = adaptations[0] as StateValue;
+            }
+
+            let mut outputs = Vec::new();
+            if batch.spike_count() > 0 {
+                outputs.push(PrimitiveMessage::Spike {
+                    timestamp: state.tick_count,
+                    amplitude: 1.0,
+                });
+            }
+            outputs
+        } else {
+            let (new_izh_state, primitive_outputs) =
+                <IzhikevichNeuron as crate::primitives::base::Primitive>::update(
+                    state.izh_state.clone(),
+                    &state.izh_params,
+                    &primitive_inputs,
+                );
+
+            state.izh_state = new_izh_state;
+            primitive_outputs
+        };
+        #[cfg(not(feature = "gpu"))]
         let primitive_outputs = if let Some(batch) = &mut state.simd_batch {
             debug_assert_eq!(batch.neuron_count, state.neuron_count);
 
@@ -340,6 +576,7 @@ mod tests {
     async fn cognitivezooid_simd_branch_spikes() {
         let blueprint = CognitivezooidBlueprint {
             params: CognitivezooidParams {
+                use_simd: true,
                 neuron_count: 4,
                 ..Default::default()
             },

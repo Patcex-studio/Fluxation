@@ -213,6 +213,7 @@ async fn build_mnist_network(
                 weight_decay: 0.0001,
                 pruning_threshold: 0.001,
                 neuron_count: 1,
+                use_simd: true,
             },
         };
         let agent = Zoooid::new(id, Box::new(blueprint)).await?;
@@ -239,6 +240,7 @@ async fn build_mnist_network(
                 weight_decay: 0.0001,
                 pruning_threshold: 0.001,
                 neuron_count: 1,
+                use_simd: true,
             },
         };
         let agent = Zoooid::new(id, Box::new(blueprint)).await?;

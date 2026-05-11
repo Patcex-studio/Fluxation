@@ -70,7 +70,7 @@ use std::sync::Arc;
 #[cfg(feature = "gpu")]
 use std::time::Instant;
 #[cfg(feature = "gpu")]
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 #[cfg(feature = "gpu")]
 use tracing::info;
 
@@ -202,7 +202,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let gpu_resource_manager = Arc::new(Mutex::new(GpuResourceManager::new().await?));
 
     // Set up scheduler components
-    let topology = Arc::new(Mutex::new(ZoooidTopology::new()));
+    let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
     let message_bus: Arc<dyn MessageBus + Send + Sync> = Arc::new(LocalBus::new());
     let rule_engine = RuleEngine::new();
     let resource_manager = ResourceManager::new();
