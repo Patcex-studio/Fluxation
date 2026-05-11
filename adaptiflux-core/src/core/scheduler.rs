@@ -20,7 +20,6 @@ use crate::performance::async_optimization::AsyncOptimizationConfig;
 use crate::performance::sparse_execution::SparseExecutionHook;
 use crate::power::power_monitor::PowerMonitor;
 use crate::power::sleep_scheduler::SleepScheduler;
-use num_cpus;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -37,6 +36,7 @@ use crate::attention::FocusScheduler;
 use crate::core::message_bus::message::Message;
 use crate::core::message_bus::MessageBus;
 use crate::core::resource_manager::ResourceManager;
+use crate::core::system_config::SystemConfig;
 use crate::core::topology::{ConnectionProperties, SystemMetrics, ZoooidTopology};
 use crate::core::zoooid_handle::{SchedulerMetrics, ZoooidHandle};
 use crate::hierarchy::{detect_dense_groups, AbstractionLayerManager, AggregationFnKind};
@@ -242,6 +242,7 @@ impl CoreScheduler {
         resource_manager: ResourceManager,
         message_bus: Arc<dyn MessageBus + Send + Sync>,
     ) -> Self {
+        let config = SystemConfig::global();
         Self {
             agents: HashMap::new(),
             topology,
@@ -249,7 +250,7 @@ impl CoreScheduler {
             resource_manager,
             message_bus,
             should_stop: Arc::new(AtomicBool::new(false)),
-            cycle_duration_ms: Duration::from_millis(100), // 10 Hz by default
+            cycle_duration_ms: Duration::from_millis(config.scheduler_cycle_ms),
             metrics: SchedulerMetrics::default(),
             plasticity_state: PlasticityRuntimeState::default(),
             time_accum_ms: 0.0,
@@ -275,6 +276,7 @@ impl CoreScheduler {
         message_bus: Arc<dyn MessageBus + Send + Sync>,
         gpu_resource_manager: Option<Arc<Mutex<GpuResourceManager>>>,
     ) -> Self {
+        let config = SystemConfig::global();
         Self {
             agents: HashMap::new(),
             topology,
@@ -282,7 +284,7 @@ impl CoreScheduler {
             resource_manager,
             message_bus,
             should_stop: Arc::new(AtomicBool::new(false)),
-            cycle_duration_ms: Duration::from_millis(100),
+            cycle_duration_ms: Duration::from_millis(config.scheduler_cycle_ms),
             metrics: SchedulerMetrics::default(),
             plasticity_state: PlasticityRuntimeState::default(),
             time_accum_ms: 0.0,
@@ -464,8 +466,14 @@ impl CoreScheduler {
             self.spawn_agent(agent).await?;
             if let Some(near) = area_hint {
                 let mut topo = self.topology.write().await;
-                topo.add_edge(near, id, ConnectionProperties::default());
-                extra_edge_ops += 1;
+                if topo.try_add_edge(near, id, ConnectionProperties::default()) {
+                    extra_edge_ops += 1;
+                } else {
+                    debug!(
+                        "Skipped lifecycle connection {} -> {} due to topology constraints",
+                        near, id
+                    );
+                }
                 drop(topo);
                 self.plasticity_state
                     .edge_last_used
@@ -499,6 +507,43 @@ impl CoreScheduler {
         topology_snapshot: Arc<ZoooidTopology>,
         config: AsyncOptimizationConfig,
     ) -> Vec<AgentUpdateOutcome> {
+        if config.max_concurrent_updates <= 1 {
+            let mut outcomes = Vec::with_capacity(pending_updates.len());
+            for pending in pending_updates {
+                let PendingAgentUpdate {
+                    agent_id,
+                    mut handle,
+                    inputs,
+                    memory_inputs_snapshot,
+                    mem_for_update,
+                } = pending;
+
+                let inputs_for_update = inputs.clone();
+                let result = match handle
+                    .blueprint
+                    .update(
+                        &mut handle.state,
+                        inputs_for_update,
+                        topology_snapshot.as_ref(),
+                        mem_for_update.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(res) => Ok(res),
+                    Err(e) => Err(e.to_string()),
+                };
+
+                outcomes.push(AgentUpdateOutcome {
+                    handle,
+                    result,
+                    agent_id,
+                    memory_inputs_snapshot,
+                    inputs,
+                });
+            }
+            return outcomes;
+        }
+
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_updates));
         let mut join_set = JoinSet::new();
 
@@ -756,7 +801,9 @@ impl CoreScheduler {
         let config = self
             .async_optimization
             .clone()
-            .unwrap_or_else(|| AsyncOptimizationConfig::new(num_cpus::get()));
+            .unwrap_or_else(|| {
+                AsyncOptimizationConfig::new(SystemConfig::global().max_concurrent_agent_updates)
+            });
 
         let update_phase_start = std::time::Instant::now();
         let outcomes = self
@@ -829,13 +876,19 @@ impl CoreScheduler {
                         let mut topology = self.topology.write().await;
                         match change {
                             crate::core::topology::TopologyChange::RequestConnection(target) => {
-                                topology.add_edge(agent_id, target, Default::default());
-                                topology_changes += 1;
-                                self.plasticity_state.edge_last_used.insert(
-                                    (agent_id, target),
-                                    self.plasticity_state.global_iteration,
-                                );
-                                debug!("Added connection: {} -> {}", agent_id, target);
+                                if topology.try_add_edge(agent_id, target, Default::default()) {
+                                    topology_changes += 1;
+                                    self.plasticity_state.edge_last_used.insert(
+                                        (agent_id, target),
+                                        self.plasticity_state.global_iteration,
+                                    );
+                                    debug!("Added connection: {} -> {}", agent_id, target);
+                                } else {
+                                    debug!(
+                                        "Rejected connection request {} -> {} due to topology constraints",
+                                        agent_id, target
+                                    );
+                                }
                             }
                             crate::core::topology::TopologyChange::RemoveConnection(
                                 source,
@@ -1128,5 +1181,104 @@ impl CoreScheduler {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::blueprint::AgentBlueprint;
+    use crate::agent::state::RoleType;
+    use crate::core::message_bus::LocalBus;
+    use async_trait::async_trait;
+    use std::any::Any;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::time::{sleep, Duration};
+
+    struct ConcurrencyProbeBlueprint {
+        current: Arc<AtomicUsize>,
+        max_seen: Arc<AtomicUsize>,
+        delay_ms: u64,
+    }
+
+    #[async_trait]
+    impl AgentBlueprint for ConcurrencyProbeBlueprint {
+        async fn initialize(
+            &self,
+        ) -> Result<Box<dyn Any + Send + Sync>, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(Box::new(()))
+        }
+
+        async fn update(
+            &self,
+            _state: &mut Box<dyn Any + Send + Sync>,
+            _inputs: Vec<(ZoooidId, Message)>,
+            _topology: &ZoooidTopology,
+            _memory: Option<&MemoryPayload>,
+        ) -> Result<AgentUpdateResult, Box<dyn std::error::Error + Send + Sync>> {
+            let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+
+            loop {
+                let observed = self.max_seen.load(Ordering::SeqCst);
+                if now <= observed {
+                    break;
+                }
+                if self
+                    .max_seen
+                    .compare_exchange(observed, now, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+
+            sleep(Duration::from_millis(self.delay_ms)).await;
+            self.current.fetch_sub(1, Ordering::SeqCst);
+
+            Ok(AgentUpdateResult::new(Vec::new(), None, None, false))
+        }
+
+        fn blueprint_type(&self) -> RoleType {
+            RoleType::Custom("concurrency_probe".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn scheduler_can_force_sequential_agent_updates() {
+        let topology = Arc::new(RwLock::new(ZoooidTopology::new()));
+        let rule_engine = RuleEngine::new();
+        let resource_manager = ResourceManager::new();
+        let message_bus = Arc::new(LocalBus::new());
+        let mut scheduler = CoreScheduler::new(topology, rule_engine, resource_manager, message_bus);
+        scheduler.enable_async_optimization(AsyncOptimizationConfig::new(1));
+
+        let current = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+
+        for _ in 0..3 {
+            let blueprint = ConcurrencyProbeBlueprint {
+                current: Arc::clone(&current),
+                max_seen: Arc::clone(&max_seen),
+                delay_ms: 10,
+            };
+            let agent = Zoooid::new(ZoooidId::new_v4(), Box::new(blueprint))
+                .await
+                .expect("probe agent should initialize");
+            scheduler
+                .spawn_agent(agent)
+                .await
+                .expect("probe agent should spawn");
+        }
+
+        scheduler
+            .run_one_iteration()
+            .await
+            .expect("sequential iteration should succeed");
+
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "with max_concurrent_updates=1 agent updates must be strictly sequential"
+        );
     }
 }

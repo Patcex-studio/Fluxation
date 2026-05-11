@@ -303,16 +303,16 @@ pub async fn build_mnist_architecture(
     let mut topology = scheduler.topology.lock().await;
     for &sensor_id in &sensor_ids {
         for &hidden_id in &hidden_ids {
-            topology.add_edge(sensor_id, hidden_id, Default::default());
+            let _ = topology.try_add_edge(sensor_id, hidden_id, Default::default());
         }
     }
     for &hidden_id in &hidden_ids {
         for &output_id in &output_ids {
-            topology.add_edge(hidden_id, output_id, Default::default());
+            let _ = topology.try_add_edge(hidden_id, output_id, Default::default());
         }
     }
     for &output_id in &output_ids {
-        topology.add_edge(pid_id, output_id, Default::default());
+        let _ = topology.try_add_edge(pid_id, output_id, Default::default());
     }
 
     Ok(MnistSpikingClassifierArchitecture {

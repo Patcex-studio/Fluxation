@@ -250,8 +250,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     {
         let mut g = topology.lock().await;
-        g.add_edge(plant_id, pid_id, Default::default());
-        g.add_edge(pid_id, plant_id, Default::default());
+        let _ = g.try_add_edge(plant_id, pid_id, Default::default());
+        let _ = g.try_add_edge(pid_id, plant_id, Default::default());
     }
 
     println!("PID + memory + SGD — plant {:?} → controller {:?}", plant_id, pid_id);

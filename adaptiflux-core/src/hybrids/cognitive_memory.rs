@@ -122,7 +122,7 @@ impl CognitiveMemoryArchitecture {
                         < config.connection_density;
 
                     if should_connect {
-                        topology.add_edge(
+                        let _ = topology.try_add_edge(
                             neuron_ids[i],
                             neuron_ids[j],
                             crate::core::topology::ConnectionProperties::default(),

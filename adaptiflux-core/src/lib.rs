@@ -173,7 +173,7 @@ pub use crate::core::topology::{
 };
 pub use crate::core::{
     CoreScheduler, HierarchyHook, MemoryAttentionHook, OnlineAdaptationHook, ResourceManager,
-    SchedulerMetrics, ZoooidHandle,
+    SchedulerMetrics, SystemConfig, ZoooidHandle,
 };
 pub use crate::hierarchy::{
     detect_dense_groups, AbstractionLayerManager, AgentGroupAbstraction, AggregationFnKind,

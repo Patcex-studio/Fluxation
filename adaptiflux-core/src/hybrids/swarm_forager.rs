@@ -98,7 +98,7 @@ impl SwarmForagerArchitecture {
         for i in 0..agent_ids.len() {
             for j in 0..agent_ids.len() {
                 if i != j {
-                    topology.add_edge(
+                    let _ = topology.try_add_edge(
                         agent_ids[i],
                         agent_ids[j],
                         crate::core::topology::ConnectionProperties::default(),

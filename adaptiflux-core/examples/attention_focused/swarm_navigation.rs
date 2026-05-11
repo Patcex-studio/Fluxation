@@ -250,8 +250,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     {
         let mut g = topology.lock().await;
         for fid in [field_a, field_b] {
-            g.add_edge(fid, nav_id, Default::default());
-            g.add_edge(nav_id, fid, Default::default());
+            let _ = g.try_add_edge(fid, nav_id, Default::default());
+            let _ = g.try_add_edge(nav_id, fid, Default::default());
         }
     }
 

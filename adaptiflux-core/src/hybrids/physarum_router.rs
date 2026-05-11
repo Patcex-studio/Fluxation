@@ -106,13 +106,13 @@ impl PhysarumRouterArchitecture {
             let next = (i + 1) % router_ids.len();
             let prev = if i == 0 { router_ids.len() - 1 } else { i - 1 };
 
-            topology.add_edge(
+            let _ = topology.try_add_edge(
                 router_ids[i],
                 router_ids[next],
                 crate::core::topology::ConnectionProperties::default(),
             );
             if i > 0 {
-                topology.add_edge(
+                let _ = topology.try_add_edge(
                     router_ids[i],
                     router_ids[prev],
                     crate::core::topology::ConnectionProperties::default(),

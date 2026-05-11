@@ -253,7 +253,7 @@ async fn build_mnist_network(
                 .topology
                 .write()
                 .await
-                .add_edge(src, dst, Default::default());
+                .try_add_edge(src, dst, Default::default());
         }
     }
 
@@ -263,7 +263,7 @@ async fn build_mnist_network(
                 .topology
                 .write()
                 .await
-                .add_edge(src, dst, Default::default());
+                .try_add_edge(src, dst, Default::default());
         }
     }
 

@@ -24,6 +24,7 @@ use crate::agent::blueprint::base::AgentBlueprint;
 use crate::agent::synapse_manager::{SynapseManager, SynapseConfig, NormMode};
 use crate::agent::state::{AgentUpdateResult, RoleType};
 use crate::core::message_bus::message::Message;
+use crate::core::system_config::SystemConfig;
 use crate::core::topology::{TopologyChange, ZoooidTopology};
 use crate::memory::types::MemoryPayload;
 use crate::primitives::base::PrimitiveMessage;
@@ -306,7 +307,7 @@ impl AgentBlueprint for CognitivezooidBlueprint {
         // Configure SynapseManager with sensible defaults for Cognitive agents
         let synapse_config = SynapseConfig {
             norm_mode: NormMode::L1, // L1 normalization for stable STDP
-            max_connections: 50,
+            max_connections: SystemConfig::global().max_degree_per_agent,
             min_weight: 0.0,
             max_weight: 1.0,
             default_weight: 0.1,

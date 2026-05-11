@@ -95,6 +95,13 @@ pub trait AgentBlueprint: Send + Sync {
     /// Called on every scheduler iteration. Process incoming messages, update internal state,
     /// and return any outgoing messages or topology changes.
     ///
+    /// # Concurrency and Safety
+    ///
+    /// The scheduler guarantees exclusive mutable access to `state` for each invocation.
+    /// A single agent state is never updated concurrently by multiple tasks.
+    /// Implementations must still synchronize any additional shared mutable resources
+    /// outside of `state` (for example globals or cross-agent shared objects).
+    ///
     /// # Arguments
     ///
     /// * `state` - Mutable reference to the agent's current state

@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ids: Vec<ZoooidId> = scheduler.agents.keys().copied().collect();
     if ids.len() == 2 {
         let mut t = topology.lock().await;
-        t.add_edge(ids[0], ids[1], Default::default());
+        let _ = t.try_add_edge(ids[0], ids[1], Default::default());
     }
 
     let start_agents = scheduler.agent_count();

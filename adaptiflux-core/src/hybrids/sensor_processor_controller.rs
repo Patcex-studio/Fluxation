@@ -109,12 +109,12 @@ impl SensorProcessorControllerArchitecture {
 
         // Establish connections: Sensor -> Processor -> Controller
         let mut topology = scheduler.topology.write().await;
-        topology.add_edge(
+        let _ = topology.try_add_edge(
             sensor_id,
             processor_id,
             crate::core::topology::ConnectionProperties::default(),
         );
-        topology.add_edge(
+        let _ = topology.try_add_edge(
             processor_id,
             controller_id,
             crate::core::topology::ConnectionProperties::default(),

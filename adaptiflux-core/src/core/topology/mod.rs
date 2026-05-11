@@ -24,9 +24,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::debug;
 
+use crate::core::system_config::SystemConfig;
 use crate::utils::types::{StateValue, ZoooidId};
-
-const MAX_DEGREE_PER_AGENT: usize = 50;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectionProperties {
@@ -86,6 +85,8 @@ impl ZoooidTopology {
         to: ZoooidId,
         props: ConnectionProperties,
     ) -> bool {
+        let max_degree = Self::max_degree_per_agent();
+
         // Check if edge already exists
         if self.graph.contains_edge(from, to) {
             return false;
@@ -96,7 +97,7 @@ impl ZoooidTopology {
             .graph
             .neighbors_directed(from, Direction::Outgoing)
             .count();
-        if from_outgoing >= MAX_DEGREE_PER_AGENT {
+        if from_outgoing >= max_degree {
             return false;
         }
 
@@ -105,31 +106,16 @@ impl ZoooidTopology {
             .graph
             .neighbors_directed(to, Direction::Incoming)
             .count();
-        if to_incoming >= MAX_DEGREE_PER_AGENT {
+        if to_incoming >= max_degree {
             return false;
         }
 
-        self.graph.add_edge(from, to, props.clone());
-
-        // Invalidate metrics cache on topology change
-        self.metrics_cache.invalidate();
-
-        // Publish event if event bus is available
-        if let Some(bus) = &self.event_bus {
-            let event = crate::core::TopologyEvent::EdgeAdded {
-                from,
-                to,
-                initial_weight: props.weight,
-            };
-            let _ = bus.publish(event);
-        }
+        self.add_edge_unchecked(from, to, props);
 
         true
     }
 
-    /// Legacy method for backward compatibility: adds edge without degree check.
-    /// Use try_add_edge() for plasticity rules to respect topology limits.
-    pub fn add_edge(&mut self, from: ZoooidId, to: ZoooidId, props: ConnectionProperties) {
+    fn add_edge_unchecked(&mut self, from: ZoooidId, to: ZoooidId, props: ConnectionProperties) {
         self.graph.add_edge(from, to, props.clone());
 
         // Invalidate metrics cache on topology change
@@ -144,6 +130,18 @@ impl ZoooidTopology {
             };
             let _ = bus.publish(event);
         }
+    }
+
+    /// Legacy method kept for compatibility.
+    ///
+    /// This method now delegates to try_add_edge() and therefore enforces
+    /// max degree constraints. It is deprecated and will be removed in a future major release.
+    #[deprecated(
+        since = "1.0.1",
+        note = "Use try_add_edge(); add_edge() is legacy and will be removed in a future major release"
+    )]
+    pub fn add_edge(&mut self, from: ZoooidId, to: ZoooidId, props: ConnectionProperties) {
+        let _ = self.try_add_edge(from, to, props);
     }
 
     /// Removes an edge and publishes event if event bus is configured.
@@ -229,13 +227,13 @@ impl ZoooidTopology {
     pub fn is_near_degree_capacity(&self, id: ZoooidId) -> bool {
         let outgoing = self.get_outgoing_degree(id);
         let incoming = self.get_incoming_degree(id);
-        let threshold = (MAX_DEGREE_PER_AGENT * 80) / 100; // 80% threshold
+        let threshold = (Self::max_degree_per_agent() * 80) / 100; // 80% threshold
         outgoing >= threshold || incoming >= threshold
     }
 
     /// Get the MAX_DEGREE_PER_AGENT constant (for external use)
     pub fn max_degree_per_agent() -> usize {
-        MAX_DEGREE_PER_AGENT
+        SystemConfig::global().max_degree_per_agent
     }
 
     pub fn add_node(&mut self, id: ZoooidId) {
@@ -278,7 +276,7 @@ impl ZoooidTopology {
             return 0.0;
         }
 
-        let max_possible_edges = num_agents * MAX_DEGREE_PER_AGENT as f64;
+        let max_possible_edges = num_agents * Self::max_degree_per_agent() as f64;
         total_edges / max_possible_edges
     }
 }
@@ -429,4 +427,50 @@ impl SystemMetrics {
 pub enum TopologyChange {
     RequestConnection(ZoooidId),
     RemoveConnection(ZoooidId, ZoooidId),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_add_edge_rejects_when_source_out_degree_is_full() {
+        let mut topology = ZoooidTopology::new();
+        let source = ZoooidId::new_v4();
+        topology.add_node(source);
+
+        let max_degree = ZoooidTopology::max_degree_per_agent();
+
+        for _ in 0..max_degree {
+            let target = ZoooidId::new_v4();
+            topology.add_node(target);
+            assert!(topology.try_add_edge(source, target, ConnectionProperties::default()));
+        }
+
+        let extra_target = ZoooidId::new_v4();
+        topology.add_node(extra_target);
+        assert!(!topology.try_add_edge(source, extra_target, ConnectionProperties::default()));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn legacy_add_edge_respects_try_add_edge_constraints() {
+        let mut topology = ZoooidTopology::new();
+        let source = ZoooidId::new_v4();
+        topology.add_node(source);
+
+        let max_degree = ZoooidTopology::max_degree_per_agent();
+        for _ in 0..max_degree {
+            let target = ZoooidId::new_v4();
+            topology.add_node(target);
+            topology.add_edge(source, target, ConnectionProperties::default());
+        }
+
+        let edge_count_before = topology.graph.edge_count();
+        let extra_target = ZoooidId::new_v4();
+        topology.add_node(extra_target);
+        topology.add_edge(source, extra_target, ConnectionProperties::default());
+
+        assert_eq!(topology.graph.edge_count(), edge_count_before);
+    }
 }

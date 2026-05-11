@@ -110,7 +110,7 @@ fn bench_mnist_integration(c: &mut Criterion) {
                             .topology
                             .write()
                             .await
-                            .add_edge(src, dst, Default::default());
+                            .try_add_edge(src, dst, Default::default());
                     }
                 }
                 for &src in &hidden_ids {
@@ -119,7 +119,7 @@ fn bench_mnist_integration(c: &mut Criterion) {
                             .topology
                             .write()
                             .await
-                            .add_edge(src, dst, Default::default());
+                            .try_add_edge(src, dst, Default::default());
                     }
                 }
 

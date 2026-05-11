@@ -125,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         for i in 0..4 {
             let a = ids[i];
             let b = ids[(i + 1) % 4];
-            t.add_edge(a, b, Default::default());
+            let _ = t.try_add_edge(a, b, Default::default());
         }
     }
 
