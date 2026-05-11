@@ -2,156 +2,128 @@
 
 ## Overview
 
-This guide explains how to leverage Apple Metal GPU acceleration for Fluxation on macOS, particularly on Apple Silicon (M1/M2/M3) integrated GPUs.
+This guide documents the current Apple Metal GPU acceleration support in `adaptiflux-core`.
+It is based on the actual implementation of `GpuContext`, `GpuConfig`, and `GpuResourceManager` in the codebase.
 
 ## Architecture
 
 ### Key Components
 
-1. **GpuContext** - Initializes wgpu with Metal backend prioritization on macOS
-   - Automatically selects Metal backend on macOS
-   - Falls back to Vulkan on Linux, DirectX 12 on Windows
-   - Logs device capabilities (unified memory, compute units, etc.)
+1. **GpuContext**
+   - Initializes `wgpu` with Metal backend prioritization on macOS.
+   - Uses `GpuContext::new_with_preference(wgpu::PowerPreference::HighPerformance)`.
+   - On macOS selects `wgpu::Backends::METAL`.
+   - On Linux selects `wgpu::Backends::VULKAN`.
+   - On Windows selects `wgpu::Backends::DX12 | wgpu::Backends::VULKAN`.
+   - Logs device capabilities and estimates unified memory support.
 
-2. **GpuResourceManager** - Allocates GPU resources to agents
-   - Tracks which agents are GPU-accelerated
-   - Manages maximum concurrent GPU operations
-   - Integrates with CoreScheduler
+2. **GpuResourceManager**
+   - Wraps `GpuContext` and exposes GPU allocation for agents.
+   - Tracks which agents are allocated to GPU.
+   - Limits concurrent GPU usage via `max_concurrent_agents` (default 1).
+   - Provides `allocate_for_agent`, `deallocate_for_agent`, and `is_agent_on_gpu`.
 
-3. **BufferManager** - Manages GPU buffers efficiently
-   - Supports STORAGE, UNIFORM, and COPY buffers
-   - Tracks dirty flags for incremental updates
-   - Optimized for unified memory architectures
+3. **GpuConfig**
+   - Controls which GPU phases are enabled.
+   - Configures batch sizes, sync intervals, profiling, and fallback behavior.
+   - Provides profiles for Apple silicon, discrete GPUs, and CPU-only operation.
 
-4. **ShaderRunner** - Executes WGSL compute shaders
-   - Manages compute pipelines
-   - Dispatches workgroups
-   - Synchronizes GPU/CPU
+4. **Shader modules**
+   - The GPU module exports shader names used by the backend:
+     - `AGENT_UPDATE_SHADER`
+     - `CONNECTION_CALCULATE_SHADER`
+     - `PLASTICITY_PRUNING_SHADER`
+     - `PLASTICITY_SYNAPTOGENESIS_SHADER`
+     - `HORMONE_SIMULATION_SHADER`
+     - `LIF_UPDATE_SHADER`
 
-5. **GpuConfig** - Configuration for GPU acceleration
-   - Enables/disables specific GPU operations
-   - Controls batch sizes and sync intervals
-   - Provides pre-configured profiles
+## Supported GPU Configuration
 
-### WGSL Shaders
+### Apple Silicon Profile
 
-The following compute shaders are provided:
+`GpuConfig::apple_silicon()` returns the current macOS-oriented profile:
 
-- **AGENT_UPDATE_SHADER** - Izhikevich neuron model updates
-  - Input: agent state buffer, parameters
-  - Output: updated agent states with spike detection
-  - Workgroup size: 256 threads (optimized for Apple GPU)
+- `enable_agent_update = true`
+- `enable_connection_calculate = true`
+- `enable_plasticity = true`
+- `enable_hormone_simulation = true`
+- `agent_batch_size = 512`
+- `connection_batch_size = 1024`
+- `enable_cpu_fallback = true`
+- `enable_incremental_updates = true`
+- `sync_interval_iterations = 10`
+- `enable_profiling = true`
+- `optimize_for_igpu = true`
+- `prefer_high_performance = true`
 
-- **CONNECTION_CALCULATE_SHADER** - STDP plasticity calculations
-  - Input: agents, edges, STDP parameters
-  - Output: updated synaptic weights
-  - Implements Spike-Timing-Dependent Plasticity
+### Discrete GPU Profile
 
-- **PLASTICITY_PRUNING_SHADER** - Weak connection removal
-  - Input: edge strengths, activity traces
-  - Output: prune flags for edge removal
-  - Supports structural plasticity
+`GpuConfig::discrete_gpu()` returns:
 
-- **PLASTICITY_SYNAPTOGENESIS_SHADER** - New connection formation
-  - Input: agent activity signals
-  - Output: synapse creation count
-  - Drives network growth
+- `agent_batch_size = 2048`
+- `connection_batch_size = 4096`
+- `enable_incremental_updates = false`
+- `sync_interval_iterations = 100`
+- `optimize_for_igpu = false`
 
-- **HORMONE_SIMULATION_SHADER** - Neuromodulator dynamics
-  - Input: network error/reward signals
-  - Output: dopamine, cortisol, adrenaline levels
-  - Global state updates (single workgroup)
+### CPU-Only Profile
 
-- **LIF_UPDATE_SHADER** - Simplified Leaky Integrate-and-Fire model
-  - Alternative to Izhikevich
-  - Lower compute requirement
-  - Suitable for large networks
+`GpuConfig::cpu_only()` disables all GPU phases and keeps fallback semantics safe.
 
-## Apple Silicon Optimizations
+### Validation Rules
 
-### Unified Memory Architecture
+`GpuConfig::validate()` checks:
 
-Apple Silicon's unified memory is a key advantage:
+- `agent_batch_size > 0`
+- `connection_batch_size > 0`
+- if GPU is enabled and `enable_cpu_fallback == false`, then `sync_interval_iterations` must be non-zero.
 
-- **Single memory pool** for CPU and GPU
-- **No explicit transfers** - automatic coherency
-- **Lower latency** for CPU/GPU synchronization
-- **Reduced memory overhead** - no duplication
+## GPU Backend Initialization
 
-**Optimization**: Use `GpuConfig::apple_silicon()` which enables:
-- Incremental buffer updates (only changed regions)
-- Lower sync intervals (10 iterations vs 100)
-- Smaller batch sizes (512 agents vs 2048 for discrete GPU)
+### Creating a GPU context
 
-### Integrated GPU Characteristics
-
-M1/M2/M3 GPUs have:
-- **Shared L4 cache** with CPU
-- **Up to 8 GPU cores** (variable by chip)
-- **High memory bandwidth** to system RAM
-- **Power efficient** - great for laptops
-
-**Optimization**: 
-- Minimize memory transfers
-- Use workgroup size of 256 (safe for all Apple GPUs)
-- Favor frequent small kernels over rare large ones
-- Leverage cache locality
-
-### Power Preference
-
-Always use `PowerPreference::HighPerformance` for Fluxation:
 ```rust
 let context = GpuContext::new_with_preference(
-    wgpu::PowerPreference::HighPerformance
+    wgpu::PowerPreference::HighPerformance,
 ).await?;
 ```
 
-This ensures we use GPU cores, not GPU throttling.
+`GpuContext::new()` is an alias for the same high-performance preference.
 
-## Usage Examples
+### Platform backend selection
 
-### Basic GPU-Accelerated Scheduler
+- macOS: `wgpu::Backends::METAL`
+- Linux: `wgpu::Backends::VULKAN`
+- Windows: `wgpu::Backends::DX12 | wgpu::Backends::VULKAN`
+
+### Notes
+
+- The implementation currently does not expose a public `force_fallback_adapter` option.
+- If adapter creation fails, verify platform GPU support, macOS version, and `wgpu` compatibility.
+
+## Using GPU Acceleration in CoreScheduler
+
+### Example: create scheduler with GPU support
 
 ```rust
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use adaptiflux_core::gpu::{GpuConfig, GpuResourceManager};
 use adaptiflux_core::core::CoreScheduler;
 
-// Initialize GPU for Apple Silicon
-let gpu_manager = Arc::new(Mutex::new(
-    GpuResourceManager::new().await?
-));
-
-// Create scheduler with GPU
+let gpu_manager = Arc::new(Mutex::new(GpuResourceManager::new().await?));
 let mut scheduler = CoreScheduler::new_with_gpu(
-    topology, rule_engine, resource_manager, message_bus,
+    topology,
+    rule_engine,
+    resource_manager,
+    message_bus,
     Some(gpu_manager),
 );
 
-// Configure for Apple Silicon
 scheduler.set_gpu_config(GpuConfig::apple_silicon());
-
-// Run with GPU acceleration
-scheduler.run().await?;
 ```
 
-### Custom GPU Configuration
-
-```rust
-let mut config = GpuConfig::apple_silicon();
-
-// Disable plasticity GPU acceleration (keep on CPU)
-config.enable_plasticity = false;
-
-// Increase batch size for faster computation
-config.agent_batch_size = 1024;
-
-// Enable detailed profiling
-config.enable_profiling = true;
-
-scheduler.set_gpu_config(config);
-```
-
-### GPU Agent Blueprint
+### GPU-capable agent blueprints
 
 ```rust
 #[async_trait]
@@ -159,142 +131,75 @@ impl AgentBlueprint for MyGpuAgent {
     // ... required methods ...
 
     fn supports_gpu(&self) -> bool {
-        true  // Signal that this agent can run on GPU
+        true
     }
 }
 ```
 
+The scheduler allocates GPU resources only for agents where `supports_gpu()` returns `true`.
+
 ## Performance Tuning
 
-### Batch Sizes
+### Batch sizes
 
-Adjust `agent_batch_size` based on network size:
+Current code uses these empirical defaults:
 
-| Network Size | Recommended Batch | Device Type |
+| Network Size | Recommended `agent_batch_size` | Notes |
 |---|---|---|
-| < 500 agents | 256 | Any Apple GPU |
-| 500-2000 | 512 | M1 CPU-bounded |
-| 2000-5000 | 1024 | M2/M3 |
-| 5000+ | 2048 | Discrete GPU |
+| < 500 agents | 256 | GPU overhead can dominate |
+| 500-2000 | 512 | Apple silicon default |
+| 2000-5000 | 1024 | Better balance of throughput |
+| 5000+ | 2048 | Use with larger GPUs |
 
-### Sync Intervals
+### Sync interval
 
-`sync_interval_iterations` controls how often GPU results are synced back to CPU:
+- `sync_interval_iterations = 10` is used by the Apple silicon profile.
+- `sync_interval_iterations = 100` is used by the discrete GPU profile.
+- `0` is only safe when GPU is disabled or CPU fallback remains enabled.
 
-- **Apple Silicon**: 10-20 (fast unified memory)
-- **Discrete GPU**: 100+ (high transfer cost)
-- **0**: Never sync back (GPU-only mode)
+### Profiling
 
-### Workgroup Sizes
+`enable_profiling` is enabled in both built-in GPU profiles.
 
-WGSL shaders use adaptive workgroup sizing:
+### Integrated GPU characteristics
 
-```wgsl
-@compute @workgroup_size(256)
-fn kernel() {
-    // Safe for all Apple GPUs
-    // 256 threads per workgroup
-}
-```
+Apple GPUs typically offer:
+- shared memory/cache with the CPU
+- high bandwidth to system RAM
+- power-efficient compute
 
-For very high parallelism:
-```wgsl
-@compute @workgroup_size(512)  // M2+
-```
+The current implementation optimizes for these characteristics using smaller batch sizes and incremental updates.
 
-### Memory Layout
+## WGSL and Shader Notes
 
-Arrange buffers for cache efficiency:
-
-```rust
-// Good: agents and params are read sequentially
-let _ = agents[idx];
-let _ = params[idx];
-
-// Bad: strided memory access (cache miss)
-let _ = agents[idx * 2];
-```
+The code exports WGSL shader constants in `adaptiflux_core::gpu`.
+The exact shader definitions are stored in `src/gpu/shaders`.
 
 ## Troubleshooting
 
-### GPU Initialization Fails
+### Initialization failures
 
-```
-Failed to find an appropriate adapter
-```
+If `GpuContext::new()` fails with `Failed to find an appropriate adapter`, verify:
 
-**Cause**: Metal framework not initialized or unavailable
+- macOS 11+ and Metal support
+- the `gpu` feature is enabled in the crate
+- the system GPU drivers are current
 
-**Solution**:
-1. Ensure macOS 11.0 or newer
-2. Check that discrete GPU drivers are up to date
-3. Set `force_fallback_adapter: true` in desperation
+### Memory pressure
 
-### Out of Memory
+If GPU memory is exhausted, reduce `agent_batch_size` and `connection_batch_size`.
 
-```
-Validation error: not enough space in staging belt
-```
+### Shader compilation errors
 
-**Solution**:
-1. Reduce `agent_batch_size`
-2. Reduce number of agents per GPU
-3. Use `enable_incremental_updates: false` to save memory
+Validate WGSL binding layout and data structure alignment between CPU and GPU.
 
-### Shader Compilation Errors
+## Implementation Reality
 
-```
-Shader compilation failed: ...
-```
-
-**Solution**:
-1. Ensure WGSL syntax is correct
-2. Check buffer bindings (group and binding numbers)
-3. Verify type sizes match CPU struct layouts
-
-### Performance Degradation
-
-Slower than CPU on small networks (< 256 agents)?
-
-**Reason**: GPU overhead dominates computation time
-
-**Solution**:
-1. Increase network size to 1000+ agents
-2. Use `GpuConfig::cpu_only()` for small networks
-3. Profile with `enable_profiling: true`
-
-## Architecture Decisions
-
-### Why wgpu?
-
-- **Cross-platform**: Metal, Vulkan, DX12, OpenGL in single code
-- **Safe**: Memory safety, no undefined behavior
-- **Modern**: Compute shaders, bindless resources
-- **Active**: Maintained, following GPU standards
-
-### Why WGSL?
-
-- **Portable**: Compiles to Metal, SPIR-V, etc.
-- **Safe**: TypeScript-like safety
-- **Modern**: Aligned with WebGPU standard
-- **Readable**: Clear compute semantics
-
-### Why Unified Memory for Apple?
-
-- **Natural fit**: Apple Silicon architecture is unified
-- **Efficient**: Automatic coherency
-- **Simple**: No explicit sync code
-- **Performance**: L4 cache utilization
-
-## Future Enhancements
-
-1. **Adaptive workgroup sizing** - Query device limits at runtime
-2. **Shader specialization** - Different kernels for different agent types
-3. **Async compute** - Overlapping compute with memory transfers
-4. **Profiling integration** - MTLCounterSampleBuffer support on Metal
-5. **Distributed GPU** - Multiple GPUs across machines
-6. **Quantization** - FP16/INT8 for memory efficiency
-7. **Sparsity** - Sparse matrix operations for sparse networks
+- `GpuContext` uses `wgpu::Features::empty()` and a custom `wgpu::Limits` with `max_compute_invocations_per_workgroup = 1024`.
+- `GpuResourceManager` stores a `HashSet<ZoooidId>` and currently allows only one GPU allocation by default.
+- On macOS, `GpuConfig::default()` resolves to `GpuConfig::apple_silicon()`.
+- `GpuConfig` supports Apple silicon, discrete GPU, and CPU-only builder profiles.
+- `enable_cpu_fallback` protects against GPU failures.
 
 ## References
 

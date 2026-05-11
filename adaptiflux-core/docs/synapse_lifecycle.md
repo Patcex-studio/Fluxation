@@ -1,273 +1,146 @@
 # Synapse Lifecycle Architecture
 
-## Overview Diagram
+## Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         SYNAPSE LIFECYCLE                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
+`SynapseManager` centralizes incoming synapse state for an agent and keeps it consistent with topology events.
+It uses a compact `Vec<SynapseEntry>` plus an `incoming_map: HashMap<ZoooidId, usize>` for fast lookup and efficient cleanup.
 
-TIME ──────────────────────────────────────────────────────────────────────────>
+## Event-driven synapse state
 
- 1. CREATION PHASE
-    ─────────────────────────────────────────────────────────────────────────
+`TopologyEventBus` broadcasts topology events to subscribers.
+`SynapseManager::on_topology_event` handles the current event set and updates local synapse state.
 
-    Topology               CoreScheduler             CognitivezooidAgent
-    ─────────              ─────────────             ─────────────────
-        │                      │                           │
-        ├─ add_edge(A→B) ─────>│                           │
-        │                      │                           │
-        ├─ Publish:EdgeAdded   │  ┌─────────────────────>  │
-        │                      │  │                        │
-        │                      │  └─── on_topology_event() │
-        │                      │                           │
-        │                      │  synapse_manager         │
-        │                      │  .add_synapse(A, 0.1)    │
-        │                      │                           │
-        │                      │  ✅ Synapse Created      │
-        │                      │  incoming_map[A] = 0     │
-        │                      │  weights[0] = 0.1        │
+### Topology events supported
 
- 2. ACTIVE PHASE (During Network Operation)
-    ─────────────────────────────────────────────────────────────────────────
+- `TopologyEvent::EdgeAdded { from, to, initial_weight }`
+- `TopologyEvent::EdgeRemoved { from, to }`
+- `TopologyEvent::WeightUpdated { from, to, new_weight }`
+- `TopologyEvent::TopologySnapshot { edges }`
 
-    Agent A              TopologyEventBus           Agent B (Cognitivezooid)
-    ────────             ────────────────           ──────────────────────
-        │                     │                           │
-        ├─ Spike ──────────>  │                           │
-        │  (SpikeEvent)       │                           │
-        │                     ├──────────────────────>   │
-        │                     │ on_topology_event()      │
-        │                     │ (if EdgeAdded)           │
-        │                     │                           │
-        │                     │                    ┌──── │
-        │                     │                    │      │
-        │                     │     Update Synapse Manager:
-        │                     │                    │
-        │                    "▼"                   "▼"
-        │            SynapseManager                │
-        │            ─────────────────             │
-        │            incoming_map[A] = 0  ✅ O(1) lookup
-        │            weights[0].weight = 0.1
-        │
-        │         Get Weight (O(1) average):
-        │         ────────────────────────
-        │         weight = manager.get_weight(A)
-        │         │
-        │         └──> HashMap lookup ──> Return 0.1
-        │
-        │         Update Weight (STDP):
-        │         ──────────────────
-        │         manager.update_weight(A, ΔW, tick)
-        │         │
-        │         ├──> ΔW = STDP_rule(Δt)
-        │         ├──> w_new = w_old + ΔW
-        │         ├──> Clamp to [min, max]
-        │         └──> Store in weights[0]
-        │
-        │         Normalize Weights:
-        │         ──────────────────
-        │         manager.normalize() {
-        │           match norm_mode {
-        │             L1      => w /= sum(|w_i|)
-        │             L2      => w /= sqrt(sum(w_i²))
-        │             Softmax => w = exp(w) / sum(exp(w_j))
-        │             None    => w = clamp(w, min, max)
-        │           }
-        │         }
+Snapshots use the edge format `Vec<(ZoooidId, ZoooidId, f32)>`.
 
- 3. TERMINATION PHASE (Edge Removal)
-    ─────────────────────────────────────────────────────────────────────────
+## SynapseManager internals
 
-    Topology               TopologyEventBus          Agent B
-    ─────────              ────────────────          ───────
-        │                      │                       │
-        ├─ remove_edge(A→B) ───│                       │
-        │                      │                       │
-        ├─ Publish:            │                       │
-        │  EdgeRemoved(A,B)    │                       │
-        │                      │                       │
-        │                      ├──────────────────>    │
-        │                      │ on_topology_event()   │
-        │                      │ (EdgeRemoved)         │
-        │                      │                       │
-        │                      │  synapse_manager     │
-        │                      │  .remove_synapse(A)  │
-        │                      │                       │
-        │                      │  ┌─────────────────  │
-        │                      │  │ Swap-Remove:     │
-        │                      │  │ ─────────────     │
-        │                      │  │ idx = map[A] = 0  │
-        │                      │  │ map.remove(A)     │
-        │                      │  │ If 0 < len-1:     │
-        │                      │  │   last = weights  │
-        │                      │  │   weights[0] = last
-        │                      │  │   map[last.id] = 0
-        │                      │  │ weights.pop()     │
-        │                      │  └──────────────────  │
-        │                      │                       │
-        │                      │  ✅ Synapse Removed  │
-        │                      │  ❌ No memory leak    │
+`SynapseManager` stores:
 
- 4. ERROR HANDLING PHASE
-    ─────────────────────────────────────────────────────────────────────────
+- `incoming_map: HashMap<ZoooidId, usize>` — maps source IDs to indices in the vector
+- `weights: Vec<SynapseEntry>` — compact list of synapses
+- `config: SynapseConfig` — bounds, normalization mode, and max connections
+- `update_count: u64`
 
-    Error Condition                    Mitigation
-    ───────────────                    ──────────
-    Max connections exceeded   ──>  Return Err, silently fail add_synapse
-                                    Old: crash with panic
-                                    New: graceful degradation
+### Synapse entry
 
-    Weight tracking mismatch  ──>   TopologyEventBus keeps sync:
-                                    Automatic remove on EdgeRemoved
-                                    No manual index tracking needed
+Each `SynapseEntry` contains:
 
-    Subscriber lag in events  ──>   Broadcast buffer (>1024 events)
-                                    If overflow: subscriber gets Lagged
-                                    Recovery: request TopologySnapshot
+- `source_id`
+- `weight`
+- `last_updated`
+- `metadata`
 
-    Orphaned weights          ──>   Automatic cleanup on topology change
-                                    No dangling references
-                                    Memory is reclaimed
+### Connection limits
 
+`SynapseConfig::default()` sets `max_connections = 50`.
+`add_synapse` returns `Err` if this limit is exceeded.
 
-DETAILED SEQUENCE: STDP Update Cycle
-════════════════════════════════════════════════════════════════════════════
+## Add, update, remove
 
- t₀=100ms: Spike from A
-     │
-     ├─> Recording: last_pre_spike_times[A] = 100
-     │
-     └─> state.synapse_manager.add_synapse(A, 0.1)
-           │
-           ├─ HashMap insert: incoming_map[A] = 0
-           │
-           └─ Vector push: weights = [SynapseEntry {
-                  source_id: A,
-                  weight: 0.1,
-                  last_updated: 0,
-                  metadata: None
-              }]
+### `add_synapse`
 
- t₁=105ms: Post-synaptic spike in B
-     │
-     ├─> has_spiked = true
-     │
-     └─> For each source in manager.get_sources():
-           │ (e.g., A)
-           │
-           ├─> delta_t = (105 - 100) = +5ms  [pre BEFORE post]
-           │
-           ├─> dw = stdp_a_plus * exp(-5 / tau_plus)
-           │   ≈ 0.01 * exp(-5 / 20)
-           │   ≈ 0.01 * 0.779
-           │   ≈ 0.0078
-           │
-           ├─> actual_delta = 0.0078 * (1 - 0.0001)  [weight decay]
-           │                 ≈ 0.00779
-           │
-           └─> manager.update_weight(A, 0.00779, 105)
-                 │
-                 ├─> new_weight = 0.1 + 0.00779 = 0.10779
-                 │
-                 ├─> Clamp to [0.0, 1.0]: 0.10779
-                 │
-                 └─> Store: weights[0].weight = 0.10779
+- Clamps weight to `[min_weight, max_weight]`
+- Updates existing synapse if the source already exists
+- Adds a new entry otherwise
+- Enforces `max_connections`
 
- t₁ (cont.): Normalization
-     │
-     └─> manager.normalize()  [norm_mode = L1]
-           │
-           ├─> sum_abs = |0.10779| = 0.10779
-           │
-           └─> new_weight = 0.10779 / 0.10779 = 1.0
-                 └─> (Normalized to L1 unit ball)
+### `remove_synapse`
 
+- Removes the synapse by source ID
+- Uses swap-remove to keep the vector compact
+- Updates `incoming_map` for the swapped entry
 
-EVENT BUS ARCHITECTURE
-══════════════════════════════════════════════════════════════════════════════
+### `update_weight`
 
- TopologyEventBus (Global)
- ────────────────
-     │
-     ├─ Sender<TopologyEvent>     ◄─ Published events
-     │                              (add_edge, remove_edge, etc.)
-     │
-     ├─ Broadcast Channel (1024 slots)
-     │  │
-     │  ├─ Slot 0: EdgeAdded(A→B, w=0.5)
-     │  ├─ Slot 1: EdgeAdded(C→B, w=0.3)
-     │  ├─ Slot 2: EdgeRemoved(A→B)
-     │  ├─ Slot 3: TopologySnapshot(edges=[...])
-     │  └─ ...
-     │
-     └─ Subscribers (per agent)
-        │
-        ├─ Agent B.rx: Receiver<TopologyEvent>  ◄─ Listens to all events
-        │                                         Processes only those
-        │                                         where targets(self)
-        │
-        └─ Every update():
-            │
-            └─> Check for events:
-                ├─ EdgeAdded(from, to, w)?
-                │  └─ If to == self: add_synapse(from, w)
-                │
-                ├─ EdgeRemoved(from, to)?
-                │  └─ If to == self: remove_synapse(from)
-                │
-                └─ TopologySnapshot(edges)?
-                   └─ Sync all synapses to match snapshot
+- Applies a delta to an existing weight
+- Clamps the result to `[min_weight, max_weight]`
+- Stores the provided `tick` in `last_updated`
+- Increments `update_count`
 
+### `get_weight`
 
-MEMORY MANAGEMENT
-═════════════════════════════════════════════════════════════════════════════
+- Returns the current weight for a source ID
+- O(1) average case via `HashMap` lookup
 
-Before (Vec-based):
-   Memory Layout for 50 synapses:
-   ────────────────────────────────
-   incoming_senders: Vec<ZoooidId>  (50 × 16 bytes)  = 800 bytes
-   synaptic_weights: Vec<f32>       (50 × 4 bytes)   = 200 bytes
-   ─────────────────────────────────────────────────────────────
-   Total: ~1000 bytes + Vec allocation overhead
-   
-   ❌ Problem: When topology changes, no automatic cleanup
-   ❌ Dangling references can accumulate over 24h+ runtime
+## Normalization modes
 
-After (SynapseManager):
-   Memory Layout for 50 synapses:
-   ────────────────────────────────
-   incoming_map: HashMap<Uuid, usize>     ≈ 800 bytes + hash overhead
-   weights: Vec<SynapseEntry>             ≈ 2500 bytes (50 × 50 bytes)
-                                             per entry has source_id (16) +
-                                             weight (4) + timestamp (8) + metadata
-   ─────────────────────────────────────────────────────────────
-   Total: ≈ 3300 bytes (slightly more but O(1) lookup)
-   
-   ✅ Automatic cleanup via events
-   ✅ No dangling references
-   ✅ Deterministic memory usage
+`NormMode` controls normalization:
 
+- `None` — clamp only
+- `L1` — `sum(|w_i|) == 1.0`
+- `L2` — `sqrt(sum(w_i^2)) == 1.0`
+- `Softmax` — `exp(w_i) / sum(exp(w_j))`
+- `Adaptive` — no extra normalization, clamp only
 
-ERROR RECOVERY
-════════════════════════════════════════════════════════════════════════════════
+`SynapseManager::normalize()` applies the configured mode.
 
-Scenario: Event bus buffer overflow (>1024 events published)
+## Topology event handling
 
-Before (manual sync):
-   ❌ Agent doesn't know topology changed
-   ❌ Continues using stale weights
-   ❌ Learning becomes incorrect
-   ❌ Memory leak potential
+`on_topology_event` handles event targets:
 
-After (event-driven):
-   1. Agent's RX gets broadcast::error::RecvError::Lagged
-   2. Agent logs warning
-   3. Requests TopologySnapshot event
-   4. Server publishes current full topology
-   5. Agent syncs: removes orphaned, adds missing
-   6. Continues with fresh state
-   
-   ✅ Automatic recovery
-   ✅ No data corruption
-   ✅ Bounded memory
+- `EdgeAdded` → `add_synapse(from, initial_weight)`
+- `EdgeRemoved` → `remove_synapse(from)`
+- `WeightUpdated` → adjust the stored weight based on the delta
+- `TopologySnapshot` → remove stale synapses and add missing ones
+
+The manager returns descriptions of actions taken for logging.
+
+## TopologyEventBus semantics
+
+`TopologyEventBus` is a Tokio broadcast channel with a configurable buffer.
+Subscribers receive `TopologyEvent` messages and may encounter `broadcast::RecvError::Lagged` if they fall behind.
+If lag occurs, the subscriber can resynchronize using a `TopologySnapshot` event.
+
+### Event publication
+
+- `TopologyEventBus::new(buffer_size)` creates the bus
+- `TopologyEventBus::subscribe()` returns a receiver
+- `TopologyEventBus::publish(event)` sends the event to all active subscribers
+
+## Practical lifecycle
+
+1. Topology adds an edge.
+2. It publishes `TopologyEvent::EdgeAdded`.
+3. Agent subscribers receive the event.
+4. `SynapseManager::on_topology_event` updates local synapses.
+5. On edge removal, `EdgeRemoved` triggers swap-remove cleanup.
+6. On snapshot, manager synchronizes local state to the topology.
+
+## Runtime behavior
+
+- `get_sources()` returns all pre-synaptic source IDs.
+- `sum_weights()` and `avg_weight()` provide aggregate synapse metrics.
+- `clear()` removes all synapses.
+
+## Implementation notes
+
+- `SynapseManager` avoids dangling references by keeping topology state consistent with events.
+- `remove_synapse` uses swap-remove and updates the index map.
+- `TopologySnapshot` synchronization is incremental: stale entries are removed, missing edges are added.
+- The manager does not itself compute STDP rules; it only stores and normalizes weights.
+
+## Testing guarantees
+
+The current code includes tests for:
+
+- adding and removing synapses
+- weight lookup and swap-remove integrity
+- L1 normalization
+- connection limit enforcement
+- topology event handling for edge addition, removal, and snapshots
+
+## Reality vs older design
+
+The implementation is not a speculative architecture document. It reflects the current code:
+
+- `TopologyEventBus` is based on Tokio broadcast.
+- `SynapseManager` uses `HashMap<ZoooidId, usize>` and `Vec<SynapseEntry>`.
+- The lifecycle is driven by `TopologyEvent` events, not by implicit manual bookkeeping.
+- `TopologySnapshot` events carry full edge lists for resynchronization.
