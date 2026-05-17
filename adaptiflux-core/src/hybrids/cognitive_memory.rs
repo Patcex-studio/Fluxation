@@ -100,6 +100,9 @@ impl CognitiveMemoryArchitecture {
                     stdp_tau_minus: 20.0,
                     weight_decay: 0.0001,
                     pruning_threshold: 0.001,
+                    stdp_causal_window: 100,
+                    stdp_min_correlation: 0.1,
+                    stdp_enable_causal_gate: true,
                     neuron_count: 1,
                 },
             };

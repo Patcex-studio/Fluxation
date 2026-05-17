@@ -213,6 +213,12 @@ pub struct CognitivezooidParams {
     pub weight_decay: f32,
     #[serde(default = "default_pruning_threshold")]
     pub pruning_threshold: f32,
+    #[serde(default = "default_stdp_causal_window")]
+    pub stdp_causal_window: u64,
+    #[serde(default = "default_stdp_min_correlation")]
+    pub stdp_min_correlation: f32,
+    #[serde(default = "default_stdp_enable_causal_gate")]
+    pub stdp_enable_causal_gate: bool,
     #[serde(default = "default_neuron_count")]
     pub neuron_count: usize,
 }
@@ -241,6 +247,9 @@ impl Default for CognitivezooidParams {
             stdp_tau_minus: default_stdp_tau_minus(),
             weight_decay: default_weight_decay(),
             pruning_threshold: default_pruning_threshold(),
+            stdp_causal_window: default_stdp_causal_window(),
+            stdp_min_correlation: default_stdp_min_correlation(),
+            stdp_enable_causal_gate: default_stdp_enable_causal_gate(),
             neuron_count: default_neuron_count(),
         }
     }
@@ -270,6 +279,18 @@ fn default_pruning_threshold() -> f32 {
     0.001
 }
 
+fn default_stdp_causal_window() -> u64 {
+    100
+}
+
+fn default_stdp_min_correlation() -> f32 {
+    0.1
+}
+
+fn default_stdp_enable_causal_gate() -> bool {
+    true
+}
+
 #[derive(Debug, Clone)]
 pub struct CognitivezooidState {
     pub izh_state: IzhikevichState,
@@ -277,7 +298,9 @@ pub struct CognitivezooidState {
     pub tick_count: u64,
     pub spike_count: u64,
     pub last_pre_spike_times: HashMap<ZoooidId, u64>, // For STDP timing
+    pub last_post_spike_time: Option<u64>, // Last post (this neuron) spike event time
     pub synapse_manager: SynapseManager, // Centralized synapse management (replaces Vec<ZoooidId> + Vec<f32>)
+    pub eligibility_traces: HashMap<ZoooidId, (f32, u64)>, // (trace_value, last_update_time)
     pub neuron_count: usize,
     /// ⚡ SIMD batch mode for future multi-neuron agents (PERF-003)
     /// When Some: processes N neurons in groups of 4 (3-4x speedup)
@@ -347,6 +370,8 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             },
             #[cfg(feature = "gpu")]
             gpu_batch,
+            last_post_spike_time: None,
+            eligibility_traces: HashMap::new(),
         }))
     }
 
@@ -364,12 +389,88 @@ impl AgentBlueprint for CognitivezooidBlueprint {
         state.tick_count += 1;
 
         // Phase 1: Process incoming spikes and update synapse manager
+        // Store the incoming spike's timestamp (event time), not local tick.
+        // Also apply LTD (post-before-pre) on pre-event when a recent post exists.
+        let mut pre_updates_applied = false;
         for (sender, msg) in &inputs {
-            if let Message::SpikeEvent { .. } = msg {
-                state.last_pre_spike_times.insert(*sender, state.tick_count);
+            if let Message::SpikeEvent { timestamp, .. } = msg {
+                let pre_time = *timestamp;
+                state.last_pre_spike_times.insert(*sender, pre_time);
                 // Automatically add synapse via manager (O(1) if already exists)
                 let _ = state.synapse_manager.add_synapse(*sender, 0.1);
+
+                // If this neuron has recently spiked (post-before-pre), apply LTD
+                if let Some(post_time) = state.last_post_spike_time {
+                    // Δt = post - pre (negative when post before pre) -> depression
+                    let delta_t = (post_time as f32) - (pre_time as f32);
+
+                    // causal gating: check window and eligibility before applying LTD
+                    let mut allow_update = true;
+                    if self.params.stdp_enable_causal_gate {
+                        let within_window = delta_t.abs() <= (self.params.stdp_causal_window as f32);
+                        let trace_val = state
+                            .eligibility_traces
+                            .get(sender)
+                            .map(|(v, _)| *v)
+                            .unwrap_or(0.0);
+                        if !within_window || trace_val < self.params.stdp_min_correlation {
+                            allow_update = false;
+                        }
+                    }
+
+                    if allow_update {
+                        let dw = if delta_t > 0.0 {
+                            self.params.stdp_a_plus * (-delta_t / self.params.stdp_tau_plus).exp()
+                        } else {
+                            -self.params.stdp_a_minus * (delta_t.abs() / self.params.stdp_tau_minus).exp()
+                        };
+
+                        if let Some(current_w) = state.synapse_manager.get_weight(*sender) {
+                            let last_updated = state
+                                .synapse_manager
+                                .get_entry(*sender)
+                                .map(|e| e.last_updated)
+                                .unwrap_or(pre_time);
+                            let elapsed = if pre_time > last_updated { pre_time - last_updated } else { 0 };
+                            if elapsed > 0 {
+                                let decay_factor = (-(self.params.weight_decay) * (elapsed as f32)).exp();
+                                let decayed = current_w * decay_factor;
+                                let delta_decay = decayed - current_w;
+                                let _ = state
+                                    .synapse_manager
+                                    .update_weight(*sender, delta_decay, pre_time);
+                            }
+                        }
+
+                        if state.synapse_manager.update_weight(*sender, dw, pre_time).is_ok() {
+                            pre_updates_applied = true;
+                        }
+
+                        // Prune weak synapses
+                        if let Some(weight) = state.synapse_manager.get_weight(*sender) {
+                            if weight.abs() < self.params.pruning_threshold {
+                                let _ = state.synapse_manager.remove_synapse(*sender);
+                            }
+                        }
+                    }
+                }
+                // Update eligibility trace for this pre-synaptic source.
+                // Decay existing trace to current pre_time using stdp_tau_plus as time constant.
+                let entry = state.eligibility_traces.entry(*sender).or_insert((0.0, pre_time));
+                let (ref mut trace_val, ref mut last_ts) = *entry;
+                if *last_ts < pre_time {
+                    let dt = (pre_time - *last_ts) as f32;
+                    let decay = (-dt / self.params.stdp_tau_plus).exp();
+                    *trace_val *= decay;
+                }
+                *trace_val += 1.0; // increment on pre-spike
+                *last_ts = pre_time;
             }
+        }
+
+        // Normalize after any pre-event updates to keep weights stable
+        if pre_updates_applied {
+            state.synapse_manager.normalize();
         }
 
         // Phase 2: Prepare inputs for Izhikevich neuron
@@ -485,17 +586,57 @@ impl AgentBlueprint for CognitivezooidBlueprint {
             primitive_outputs
         };
 
-        // Count spikes
+        // Count spikes and capture post-spike timestamp if present
         let has_spiked = primitive_outputs.iter().any(|prim_msg| matches!(prim_msg, PrimitiveMessage::Spike { .. }));
         if has_spiked {
             state.spike_count += 1;
         }
 
+        // Determine post-spike event time (prefer primitive's timestamp; fallback to local tick)
+        let post_spike_time_opt: Option<u64> = primitive_outputs.iter().find_map(|prim_msg| {
+            if let PrimitiveMessage::Spike { timestamp, .. } = prim_msg {
+                Some(*timestamp)
+            } else {
+                None
+            }
+        });
+
         // Phase 4: Apply STDP learning rule if post-synaptic spike occurred
         if has_spiked {
+            let post_time = post_spike_time_opt.unwrap_or(state.tick_count);
+            // record last post spike time for future pre-events
+            state.last_post_spike_time = Some(post_time);
+
             for sender in state.synapse_manager.get_sources() {
                 if let Some(&pre_time) = state.last_pre_spike_times.get(&sender) {
-                    let delta_t = (state.tick_count as f32) - (pre_time as f32);
+                    // Use event timestamps for Δt: post_time - pre_time
+                    let delta_t = (post_time as f32) - (pre_time as f32);
+
+                    // Decay eligibility trace to post_time if present
+                    if let Some(ent) = state.eligibility_traces.get_mut(&sender) {
+                        let (ref mut trace_val, ref mut trace_ts) = *ent;
+                        if *trace_ts < post_time {
+                            let dt = (post_time - *trace_ts) as f32;
+                            let decay = (-dt / self.params.stdp_tau_plus).exp();
+                            *trace_val *= decay;
+                            *trace_ts = post_time;
+                        }
+                    }
+
+                    // Causal gating: require pre/post within window and minimum eligibility
+                    if self.params.stdp_enable_causal_gate {
+                        let within_window = delta_t.abs() <= (self.params.stdp_causal_window as f32);
+                        let trace_val = state
+                            .eligibility_traces
+                            .get(&sender)
+                            .map(|(v, _)| *v)
+                            .unwrap_or(0.0);
+                        if !within_window || trace_val < self.params.stdp_min_correlation {
+                            // skip update if causal condition not met
+                            continue;
+                        }
+                    }
+
                     // STDP: Δw ∝ exp(-|Δt| / τ)
                     let dw = if delta_t > 0.0 {
                         // Pre-before-post: potentiation (Δt > 0)
@@ -505,11 +646,32 @@ impl AgentBlueprint for CognitivezooidBlueprint {
                         -self.params.stdp_a_minus * (delta_t.abs() / self.params.stdp_tau_minus).exp()
                     };
 
-                    // Apply weight decay and update
-                    let decay_factor = 1.0 - self.params.weight_decay;
-                    let actual_delta = dw * decay_factor;
+                    // Apply continuous decay to the existing weight based on elapsed time since last update
+                    if let Some(current_w) = state.synapse_manager.get_weight(sender) {
+                        // retrieve last_updated from entry if available
+                        let last_updated = state
+                            .synapse_manager
+                            .get_entry(sender)
+                            .map(|e| e.last_updated)
+                            .unwrap_or(post_time);
+                        let elapsed = if post_time > last_updated { post_time - last_updated } else { 0 };
+                        if elapsed > 0 {
+                            let decay_factor = (- (self.params.weight_decay) * (elapsed as f32)).exp();
+                            let decayed = current_w * decay_factor;
+                            let delta_decay = decayed - current_w;
+                            // apply decay delta to set decayed weight
+                            let _ = state
+                                .synapse_manager
+                                .update_weight(sender, delta_decay, post_time);
+                        }
+                    }
 
-                    let _ = state.synapse_manager.update_weight(sender, actual_delta, state.tick_count);
+                    // Apply the STDP delta after decay
+                    let actual_delta = dw;
+
+                    let _ = state
+                        .synapse_manager
+                        .update_weight(sender, actual_delta, post_time);
 
                     // Prune weak synapses
                     if let Some(weight) = state.synapse_manager.get_weight(sender) {
@@ -597,4 +759,204 @@ mod tests {
             .iter()
             .any(|msg| matches!(msg, Message::SpikeEvent { .. })));
     }
+
+        #[tokio::test]
+        async fn stdp_pre_before_post_causes_ltp() {
+            let mut params = CognitivezooidParams::default();
+            params.use_simd = false;
+            params.neuron_count = 1;
+            // allow LTD even without prior eligibility for this unit test
+            params.stdp_min_correlation = 0.0;
+            let blueprint = CognitivezooidBlueprint { params };
+
+            let mut state = blueprint.initialize().await.unwrap();
+            let sender = ZoooidId::new_v4();
+            let sender2 = ZoooidId::new_v4();
+
+            // disable normalization to observe raw weight changes
+            {
+                let st = state.downcast_mut::<CognitivezooidState>().unwrap();
+                st.synapse_manager.config_mut().norm_mode = NormMode::None;
+                let _ = st.synapse_manager.add_synapse(sender2, 0.1);
+            }
+
+            // send pre-spike with event timestamp (use small timestamp to be before post)
+            let _ = blueprint
+                .update(
+                    &mut state,
+                    vec![(sender, Message::SpikeEvent { timestamp: 1, amplitude: 1.0 })],
+                    &ZoooidTopology::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            // cause post spike via analog input
+            let _ = blueprint
+                .update(
+                    &mut state,
+                    vec![(ZoooidId::new_v4(), Message::AnalogInput(1000.0))],
+                    &ZoooidTopology::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let st = state.downcast_ref::<CognitivezooidState>().unwrap();
+            let updates = st.synapse_manager.get_update_count();
+            assert!(updates > 0, "expected at least one synapse update (LTP) occurred");
+        }
+
+        #[tokio::test]
+        async fn stdp_post_before_pre_causes_ltd() {
+            let mut params = CognitivezooidParams::default();
+            params.use_simd = false;
+            params.neuron_count = 1;
+            params.stdp_min_correlation = 0.0; // allow LTD without prior eligibility for test
+            let blueprint = CognitivezooidBlueprint { params };
+
+            let mut state = blueprint.initialize().await.unwrap();
+            let sender = ZoooidId::new_v4();
+            let sender2 = ZoooidId::new_v4();
+
+            // disable normalization to observe raw weight changes
+            {
+                let st = state.downcast_mut::<CognitivezooidState>().unwrap();
+                st.synapse_manager.config_mut().norm_mode = NormMode::None;
+                let _ = st.synapse_manager.add_synapse(sender2, 0.1);
+            }
+
+            // cause post spike first
+            let _ = blueprint
+                .update(
+                    &mut state,
+                    vec![(ZoooidId::new_v4(), Message::AnalogInput(1000.0))],
+                    &ZoooidTopology::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            // read post_time
+            let st = state.downcast_ref::<CognitivezooidState>().unwrap();
+            let post_time = st.last_post_spike_time.unwrap_or(0);
+            let _ = st;
+
+            // send pre-spike with timestamp after post_time to trigger LTD
+            let pre_ts = post_time + 1;
+            let _ = blueprint
+                .update(
+                    &mut state,
+                    vec![(sender, Message::SpikeEvent { timestamp: pre_ts, amplitude: 1.0 })],
+                    &ZoooidTopology::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let st = state.downcast_ref::<CognitivezooidState>().unwrap();
+            let updates = st.synapse_manager.get_update_count();
+            assert!(updates > 0, "expected at least one synapse update (LTD) occurred");
+        }
+
+        #[tokio::test]
+        async fn causal_gate_blocks_out_of_window_updates() {
+            let mut params = CognitivezooidParams::default();
+            params.stdp_enable_causal_gate = true;
+            params.stdp_causal_window = 10; // small window
+            params.stdp_min_correlation = 0.0; // allow correlation threshold low
+
+            let blueprint = CognitivezooidBlueprint { params };
+            let mut state = blueprint.initialize().await.unwrap();
+            let sender = ZoooidId::new_v4();
+
+            // cause post spike first
+            let _ = blueprint
+                .update(
+                    &mut state,
+                    vec![(ZoooidId::new_v4(), Message::AnalogInput(1000.0))],
+                    &ZoooidTopology::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            // read post_time
+            let st = state.downcast_ref::<CognitivezooidState>().unwrap();
+            let post_time = st.last_post_spike_time.unwrap_or(0);
+            let _ = st;
+
+            // send pre-spike far outside causal window
+            let pre_ts = post_time + 1000;
+            let _ = blueprint
+                .update(
+                    &mut state,
+                    vec![(sender, Message::SpikeEvent { timestamp: pre_ts, amplitude: 1.0 })],
+                    &ZoooidTopology::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let st = state.downcast_ref::<CognitivezooidState>().unwrap();
+            let weight = st.synapse_manager.get_weight(sender).unwrap_or(0.0);
+            // Expect weight to remain at default (no LTD applied)
+            assert!((weight - 0.1).abs() < 1e-6, "expected causal gate to block update");
+        }
+
+        #[tokio::test]
+        async fn decay_applied_for_elapsed_time() {
+            let blueprint = CognitivezooidBlueprint {
+                params: CognitivezooidParams { use_simd: false, neuron_count: 1, stdp_enable_causal_gate: false, ..Default::default() },
+            };
+
+            let mut state = blueprint.initialize().await.unwrap();
+            let sender = ZoooidId::new_v4();
+
+            // add synapse explicitly
+            {
+                let st = state.downcast_mut::<CognitivezooidState>().unwrap();
+                // disable normalization to observe raw decay
+                st.synapse_manager.config_mut().norm_mode = NormMode::None;
+                let _ = st.synapse_manager.add_synapse(sender, 0.5);
+                if let Some(entry) = st.synapse_manager.get_entry_mut(sender) {
+                    entry.last_updated = 0; // set old timestamp
+                }
+                // ensure we have a recorded pre-spike time so post-spike STDP loop will process this sender
+                st.last_pre_spike_times.insert(sender, 0);
+            }
+
+            // bump local tick_count before update to simulate large elapsed time
+            {
+                let st_mut = state.downcast_mut::<CognitivezooidState>().unwrap();
+                st_mut.tick_count = 1_000_000;
+                if let Some(entry) = st_mut.synapse_manager.get_entry(sender) {
+                    // sanity check: last_updated should be old (0)
+                    let last = entry.last_updated;
+                    assert_eq!(last, 0, "expected entry.last_updated to be 0 before update");
+                }
+            }
+
+            // cause post spike at a large time to trigger decay
+            let res = blueprint
+                .update(
+                    &mut state,
+                    vec![(ZoooidId::new_v4(), Message::AnalogInput(1000.0))],
+                    &ZoooidTopology::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            // ensure the neuron actually spiked (otherwise STDP won't run)
+            assert!(res.output_messages.iter().any(|m| matches!(m, Message::SpikeEvent { .. })), "expected post spike to occur");
+
+            let st = state.downcast_ref::<CognitivezooidState>().unwrap();
+            let updates = st.synapse_manager.get_update_count();
+            let weight = st.synapse_manager.get_weight(sender).unwrap_or(0.0);
+            let last_updated = st.synapse_manager.get_entry(sender).map(|e| e.last_updated).unwrap_or(0);
+            // Expect that at least one update happened and weight decayed from 0.5 towards 0 (since elapsed large)
+            assert!(updates > 0, "expected synapse updates to have occurred (none seen)");
+            assert!(weight < 0.5, "expected weight to decay over elapsed time; last_updated={}, weight={}", last_updated, weight);
+        }
 }
